@@ -1,0 +1,50 @@
+# macOS system files
+.DS_Store
+**/.DS_Store
+.DS_Store?
+.AppleDouble
+.LSOverride
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Compiled binary files
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+*.app
+*.bin
+*.o
+*.obj
+*.class
+*.pyc
+*.pyo
+
+# Build directories
+build/
+dist/
+bin/
+obj/
+target/
+
+# IDE / Editor settings
+.vscode/
+.idea/
+*.suo
+*.user
+*.sdf
+*.opensdf
+*.vcxproj.user
+*.swp
+*~
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+*.bak
