@@ -1254,6 +1254,7 @@ struct TodoCreateWizardState {
   size_t index = 0;
   TaskCreationOptions options;
   std::optional<std::string> pendingPrefill;
+  std::string defaultStart;
 };
 
 static TodoCreateWizardState& wizardState(){
@@ -1308,6 +1309,8 @@ static Candidates completeFromList(const std::vector<std::string>& list, const s
   return listToCandidates(list, value);
 }
 
+static std::string currentTimePrefill();
+
 static bool applyNameField(const std::string& value, TaskCreationOptions& opts, std::string& err){
   std::string trimmed = todo_detail::trim(value);
   if(trimmed.empty()){
@@ -1343,7 +1346,12 @@ static bool applyTodoField(const std::string& value, TaskCreationOptions& opts, 
 
 static bool applyStartField(const std::string& value, TaskCreationOptions& opts, std::string& err){
   std::string trimmed = todo_detail::trim(value);
-  if(trimmed.empty()){ opts.startInput.reset(); return true; }
+  if(trimmed.empty()){
+    auto& st = wizardState();
+    if(st.defaultStart.empty()) st.defaultStart = currentTimePrefill();
+    opts.startInput = st.defaultStart;
+    return true;
+  }
   auto parsed = ToDoManager::instance().parseTimeValue(trimmed, false);
   if(!parsed.ok){ err = parsed.error.empty()? kTimeFormatHelp : parsed.error; return false; }
   opts.startInput = trimmed;
@@ -1489,6 +1497,7 @@ static void startCreateWizard(){
   auto& state = wizardState();
   state = TodoCreateWizardState{};
   state.active = true;
+  state.defaultStart = currentTimePrefill();
   state.fields = {
     TodoCreateWizardField{
       "Name", false, noCandidates,
@@ -1503,10 +1512,15 @@ static void startCreateWizard(){
       applyTodoField
     },
     TodoCreateWizardField{
-      "StartTime", true,
+      "StartTime", false,
       timeCandidates,
-      [](){ return std::string("绝对时间或 +1d/+2h 等"); },
-      currentTimePrefill,
+      [](){
+        auto& st = wizardState();
+        std::string base = "默认 " + (st.defaultStart.empty()? currentTimePrefill() : st.defaultStart);
+        base += "，回车可直接使用；支持绝对时间或 +1d/+2h 等";
+        return base;
+      },
+      [](){ return std::string(); },
       applyStartField
     },
     TodoCreateWizardField{

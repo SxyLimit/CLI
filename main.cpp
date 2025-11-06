@@ -758,6 +758,10 @@ int main(){
 
     Candidates cand = computeCandidates(buf);
     auto sw = splitLastWord(buf);
+    if(todoWizardActive()){
+      sw.before.clear();
+      sw.word = buf;
+    }
     int total = (int)cand.labels.size();
     bool haveCand = total>0;
 
