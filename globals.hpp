@@ -6,12 +6,14 @@
 #include <functional>
 #include <algorithm>
 #include <unordered_map>
+#include <optional>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 
@@ -154,7 +156,9 @@ struct AppSettings {
   bool completionSubsequence = false;
   std::string language = "en";
   bool showPathErrorHint = true;
-  std::string messageWatchFolder;
+  std::string messageWatchFolder = "./message";
+  std::string promptName = "mycli";
+  std::string promptTheme = "blue";
 };
 
 extern AppSettings g_settings;
@@ -175,9 +179,36 @@ void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std:
 const std::string& settings_file_path();
 
 // ===== Message watcher =====
+struct MessageFileInfo {
+  std::string path;
+  std::time_t modifiedAt = 0;
+  bool isNew = false;
+  bool isUnread = false;
+};
+
 void message_set_watch_folder(const std::string& path);
 const std::string& message_watch_folder();
 void message_poll();
 bool message_has_unread();
 std::vector<std::string> message_peek_unread();
 std::vector<std::string> message_consume_unread();
+std::vector<MessageFileInfo> message_all_files();
+std::vector<MessageFileInfo> message_pending_files();
+bool message_mark_read(const std::string& path);
+std::optional<std::string> message_resolve_label(const std::string& label);
+std::vector<std::string> message_all_file_labels();
+
+// ===== Prompt badges =====
+struct PromptBadge {
+  std::string id;
+  char letter = 0;
+  std::function<bool()> active;
+};
+
+void register_prompt_badge(const PromptBadge& badge);
+
+// ===== LLM watcher =====
+void llm_initialize();
+void llm_poll();
+bool llm_has_unread();
+void llm_mark_seen();

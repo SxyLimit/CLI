@@ -1,0 +1,8 @@
+prompt.cwd=omit
+completion.ignore_case=false
+completion.subsequence=true
+language=en
+ui.path_error_hint=true
+message.folder=./message
+prompt.name=Ciallo～(∠・ω< )⌒★
+prompt.theme=blue-purple
