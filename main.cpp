@@ -792,10 +792,11 @@ int main(){
     if(pathError){
       cursorCol += displayWidth(sw.word);
     }else if(haveCand){
-      cursorCol += highlightCursorOffset(cand.labels[sel], cand.matchPositions[sel]);
-      if(sel < cand.annotations.size() && !cand.annotations[sel].empty()){
-        cursorCol += 1 + displayWidth(cand.annotations[sel]);
+      int offset = highlightCursorOffset(cand.labels[sel], cand.matchPositions[sel]);
+      if(sel < cand.annotations.size() && !cand.annotations[sel].empty() && sw.word.empty()){
+        offset = 0;
       }
+      cursorCol += offset;
     }else{
       cursorCol += displayWidth(sw.word);
     }
