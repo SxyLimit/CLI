@@ -4,16 +4,16 @@
 
 #include <sstream>
 
-inline AppConfig g_config{};
+inline AppSettings g_settings{};
 
-enum class ConfigValueKind {
+enum class SettingValueKind {
   Boolean,
   Enum,
   String,
 };
 
-struct ConfigKeyInfo {
-  ConfigValueKind kind = ConfigValueKind::String;
+struct SettingKeyInfo {
+  SettingValueKind kind = SettingValueKind::String;
   std::vector<std::string> allowedValues;
 };
 
@@ -24,13 +24,13 @@ std::vector<std::string>& languageStorage(){
   return langs;
 }
 
-const std::map<std::string, ConfigKeyInfo>& keyInfoMap(){
-  static const std::map<std::string, ConfigKeyInfo> infos = {
-    {"prompt.cwd", {ConfigValueKind::Enum, {"full", "omit", "hidden"}}},
-    {"completion.ignore_case", {ConfigValueKind::Boolean, {"false", "true"}}},
-    {"completion.subsequence", {ConfigValueKind::Boolean, {"false", "true"}}},
-    {"language", {ConfigValueKind::String, {}}},
-    {"ui.path_error_hint", {ConfigValueKind::Boolean, {"false", "true"}}},
+const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
+  static const std::map<std::string, SettingKeyInfo> infos = {
+    {"prompt.cwd", {SettingValueKind::Enum, {"full", "omit", "hidden"}}},
+    {"completion.ignore_case", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"completion.subsequence", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"language", {SettingValueKind::String, {}}},
+    {"ui.path_error_hint", {SettingValueKind::Boolean, {"false", "true"}}},
   };
   return infos;
 }
@@ -66,7 +66,7 @@ bool parseCwdMode(const std::string& v, CwdMode& out){
 
 }
 
-inline void config_register_language(const std::string& lang){
+inline void settings_register_language(const std::string& lang){
   if(lang.empty()) return;
   auto& langs = languageStorage();
   if(std::find(langs.begin(), langs.end(), lang)==langs.end()){
@@ -74,29 +74,29 @@ inline void config_register_language(const std::string& lang){
   }
 }
 
-inline const std::vector<std::string>& config_known_languages(){
+inline const std::vector<std::string>& settings_known_languages(){
   return languageStorage();
 }
 
-inline const ConfigKeyInfo* config_key_info(const std::string& key){
+inline const SettingKeyInfo* settings_key_info(const std::string& key){
   const auto& map = keyInfoMap();
   auto it = map.find(key);
   if(it==map.end()) return nullptr;
   return &it->second;
 }
 
-inline std::vector<std::string> config_value_suggestions_for(const std::string& key){
+inline std::vector<std::string> settings_value_suggestions_for(const std::string& key){
   std::vector<std::string> out;
-  const ConfigKeyInfo* info = config_key_info(key);
+  const SettingKeyInfo* info = settings_key_info(key);
   if(!info) return out;
   switch(info->kind){
-    case ConfigValueKind::Boolean:
-    case ConfigValueKind::Enum:
+    case SettingValueKind::Boolean:
+    case SettingValueKind::Enum:
       out = info->allowedValues;
       break;
-    case ConfigValueKind::String:
+    case SettingValueKind::String:
       if(key=="language"){
-        const auto& langs = config_known_languages();
+        const auto& langs = settings_known_languages();
         out.assign(langs.begin(), langs.end());
       }
       break;
@@ -104,12 +104,12 @@ inline std::vector<std::string> config_value_suggestions_for(const std::string& 
   return out;
 }
 
-inline void load_config(const std::string& path){
-  AppConfig defaults;
-  g_config = defaults;
+inline void load_settings(const std::string& path){
+  AppSettings defaults;
+  g_settings = defaults;
 
-  config_register_language("en");
-  config_register_language("zh");
+  settings_register_language("en");
+  settings_register_language("zh");
 
   std::ifstream in(path);
   if(!in.good()) return;
@@ -131,61 +131,61 @@ inline void load_config(const std::string& path){
     val = trim(val);
     if(key=="prompt.cwd"){
       CwdMode mode;
-      if(parseCwdMode(val, mode)) g_config.cwdMode = mode;
+      if(parseCwdMode(val, mode)) g_settings.cwdMode = mode;
     }else if(key=="completion.ignore_case"){
-      bool b; if(parseBool(val,b)) g_config.completionIgnoreCase = b;
+      bool b; if(parseBool(val,b)) g_settings.completionIgnoreCase = b;
     }else if(key=="completion.subsequence"){
-      bool b; if(parseBool(val,b)) g_config.completionSubsequence = b;
+      bool b; if(parseBool(val,b)) g_settings.completionSubsequence = b;
     }else if(key=="language"){
-      if(!val.empty()){ g_config.language = val; config_register_language(val); }
+      if(!val.empty()){ g_settings.language = val; settings_register_language(val); }
     }else if(key=="ui.path_error_hint"){
-      bool b; if(parseBool(val,b)) g_config.showPathErrorHint = b;
+      bool b; if(parseBool(val,b)) g_settings.showPathErrorHint = b;
     }
   }
 }
 
-inline void save_config(const std::string& path){
+inline void save_settings(const std::string& path){
   std::ofstream out(path);
   if(!out.good()) return;
-  out << "prompt.cwd=" << cwdModeToString(g_config.cwdMode) << "\n";
-  out << "completion.ignore_case=" << (g_config.completionIgnoreCase? "true" : "false") << "\n";
-  out << "completion.subsequence=" << (g_config.completionSubsequence? "true" : "false") << "\n";
-  out << "language=" << g_config.language << "\n";
-  out << "ui.path_error_hint=" << (g_config.showPathErrorHint? "true" : "false") << "\n";
+  out << "prompt.cwd=" << cwdModeToString(g_settings.cwdMode) << "\n";
+  out << "completion.ignore_case=" << (g_settings.completionIgnoreCase? "true" : "false") << "\n";
+  out << "completion.subsequence=" << (g_settings.completionSubsequence? "true" : "false") << "\n";
+  out << "language=" << g_settings.language << "\n";
+  out << "ui.path_error_hint=" << (g_settings.showPathErrorHint? "true" : "false") << "\n";
 }
 
-inline void apply_config_to_runtime(){
-  g_cwd_mode = g_config.cwdMode;
+inline void apply_settings_to_runtime(){
+  g_cwd_mode = g_settings.cwdMode;
 }
 
-inline bool config_get_value(const std::string& key, std::string& value){
+inline bool settings_get_value(const std::string& key, std::string& value){
   if(key=="prompt.cwd"){
-    value = cwdModeToString(g_config.cwdMode); return true;
+    value = cwdModeToString(g_settings.cwdMode); return true;
   }
   if(key=="completion.ignore_case"){
-    value = g_config.completionIgnoreCase? "true" : "false"; return true;
+    value = g_settings.completionIgnoreCase? "true" : "false"; return true;
   }
   if(key=="completion.subsequence"){
-    value = g_config.completionSubsequence? "true" : "false"; return true;
+    value = g_settings.completionSubsequence? "true" : "false"; return true;
   }
   if(key=="language"){
-    value = g_config.language; return true;
+    value = g_settings.language; return true;
   }
   if(key=="ui.path_error_hint"){
-    value = g_config.showPathErrorHint? "true" : "false"; return true;
+    value = g_settings.showPathErrorHint? "true" : "false"; return true;
   }
   return false;
 }
 
-inline bool config_set_value(const std::string& key, const std::string& value, std::string& error){
+inline bool settings_set_value(const std::string& key, const std::string& value, std::string& error){
   if(key=="prompt.cwd"){
     CwdMode mode;
     if(!parseCwdMode(value, mode)){
       error = "invalid_value";
       return false;
     }
-    g_config.cwdMode = mode;
-    apply_config_to_runtime();
+    g_settings.cwdMode = mode;
+    apply_settings_to_runtime();
     return true;
   }
   if(key=="completion.ignore_case"){
@@ -194,7 +194,7 @@ inline bool config_set_value(const std::string& key, const std::string& value, s
       error = "invalid_value";
       return false;
     }
-    g_config.completionIgnoreCase = b;
+    g_settings.completionIgnoreCase = b;
     return true;
   }
   if(key=="completion.subsequence"){
@@ -203,7 +203,7 @@ inline bool config_set_value(const std::string& key, const std::string& value, s
       error = "invalid_value";
       return false;
     }
-    g_config.completionSubsequence = b;
+    g_settings.completionSubsequence = b;
     return true;
   }
   if(key=="language"){
@@ -211,8 +211,8 @@ inline bool config_set_value(const std::string& key, const std::string& value, s
       error = "invalid_value";
       return false;
     }
-    g_config.language = value;
-    config_register_language(value);
+    g_settings.language = value;
+    settings_register_language(value);
     return true;
   }
   if(key=="ui.path_error_hint"){
@@ -221,14 +221,14 @@ inline bool config_set_value(const std::string& key, const std::string& value, s
       error = "invalid_value";
       return false;
     }
-    g_config.showPathErrorHint = b;
+    g_settings.showPathErrorHint = b;
     return true;
   }
   error = "unknown_key";
   return false;
 }
 
-inline std::vector<std::string> config_list_keys(){
+inline std::vector<std::string> settings_list_keys(){
   std::vector<std::string> keys;
   for(const auto& kv : keyInfoMap()) keys.push_back(kv.first);
   std::sort(keys.begin(), keys.end());

@@ -114,12 +114,12 @@ inline std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& 
 
 // =================== Built-in Tools ===================
 inline ToolSpec make_show(){
-  ToolSpec t; t.name="show"; t.summary="Show system information (config|logs)";
-  set_tool_summary_locale(t, "en", "Show system information (config|logs)");
-  set_tool_summary_locale(t, "zh", "显示系统信息（config|logs）");
+  ToolSpec t; t.name="show"; t.summary="Show system information (setting|logs)";
+  set_tool_summary_locale(t, "en", "Show system information (setting|logs)");
+  set_tool_summary_locale(t, "zh", "显示系统信息（setting|logs）");
   t.subs = {
-    SubcommandSpec{"config", {}, {}, {}, [](const std::vector<std::string>&){
-      std::cout<<tr("show_config_output");
+    SubcommandSpec{"setting", {}, {}, {}, [](const std::vector<std::string>&){
+      std::cout<<tr("show_setting_output");
     }},
     SubcommandSpec{"logs",   {}, {}, {}, [](const std::vector<std::string>&){
       std::cout<<tr("show_logs_output");
@@ -130,58 +130,58 @@ inline ToolSpec make_show(){
   };
   return t;
 }
-inline ToolSpec make_config(){
-  ToolSpec t; t.name="config"; t.summary="Manage CLI configuration";
-  set_tool_summary_locale(t, "en", "Manage CLI configuration");
-  set_tool_summary_locale(t, "zh", "管理 CLI 配置");
+inline ToolSpec make_setting(){
+  ToolSpec t; t.name="setting"; t.summary="Manage CLI settings";
+  set_tool_summary_locale(t, "en", "Manage CLI settings");
+  set_tool_summary_locale(t, "zh", "管理 CLI 设置");
   t.subs = {
     SubcommandSpec{"get", {}, {"<key>"}, {}, [](const std::vector<std::string>& a){
       if(a.size()<3){
-        std::cout<<tr("config_get_usage")<<"\n";
-        g_parse_error_cmd="config";
+        std::cout<<tr("setting_get_usage")<<"\n";
+        g_parse_error_cmd="setting";
         return;
       }
       std::string value;
       const std::string& key = a[2];
-      if(!config_get_value(key, value)){
-        std::cout<<trFmt("config_unknown_key", {{"key", key}})<<"\n";
-        g_parse_error_cmd="config";
+      if(!settings_get_value(key, value)){
+        std::cout<<trFmt("setting_unknown_key", {{"key", key}})<<"\n";
+        g_parse_error_cmd="setting";
         return;
       }
-      std::cout<<trFmt("config_get_value", {{"key", key}, {"value", value}})<<"\n";
+      std::cout<<trFmt("setting_get_value", {{"key", key}, {"value", value}})<<"\n";
     }},
     SubcommandSpec{"set", {}, {"<key>","<value>"}, {}, [](const std::vector<std::string>& a){
       if(a.size()<4){
-        std::cout<<tr("config_set_usage")<<"\n";
-        g_parse_error_cmd="config";
+        std::cout<<tr("setting_set_usage")<<"\n";
+        g_parse_error_cmd="setting";
         return;
       }
       std::string error;
       const std::string& key = a[2];
       const std::string& value = a[3];
-      if(!config_set_value(key, value, error)){
+      if(!settings_set_value(key, value, error)){
         if(error=="unknown_key"){
-          std::cout<<trFmt("config_unknown_key", {{"key", key}})<<"\n";
+          std::cout<<trFmt("setting_unknown_key", {{"key", key}})<<"\n";
         }else{
-          std::cout<<trFmt("config_invalid_value", {{"key", key}, {"value", value}})<<"\n";
+          std::cout<<trFmt("setting_invalid_value", {{"key", key}, {"value", value}})<<"\n";
         }
-        g_parse_error_cmd="config";
+        g_parse_error_cmd="setting";
         return;
       }
-      save_config(config_file_path());
-      std::cout<<trFmt("config_set_success", {{"key", key}, {"value", value}})<<"\n";
+      save_settings(settings_file_path());
+      std::cout<<trFmt("setting_set_success", {{"key", key}, {"value", value}})<<"\n";
     }},
     SubcommandSpec{"list", {}, {}, {}, [](const std::vector<std::string>&){
-      std::cout<<tr("config_list_header")<<"\n";
-      auto keys = config_list_keys();
+      std::cout<<tr("setting_list_header")<<"\n";
+      auto keys = settings_list_keys();
       for(auto &k : keys){
-        std::string value; config_get_value(k, value);
+        std::string value; settings_get_value(k, value);
         std::cout<<"  "<<k<<" = "<<value<<"\n";
       }
     }}
   };
   t.handler = [](const std::vector<std::string>&){
-    std::cout<<tr("config_usage")<<"\n";
+    std::cout<<tr("setting_usage")<<"\n";
   };
   return t;
 }
@@ -229,8 +229,8 @@ inline ToolSpec make_cd(){
       if(flag_a) mode = "hidden";
       else if(flag_c) mode = "full";
       std::string error;
-      if(config_set_value("prompt.cwd", mode, error)){
-        save_config(config_file_path());
+      if(settings_set_value("prompt.cwd", mode, error)){
+        save_settings(settings_file_path());
         std::string modeLabel = tr(std::string("mode.")+mode);
         std::cout<<trFmt("cd_mode_updated", {{"mode", modeLabel}})<<"\n";
         return;
@@ -463,7 +463,7 @@ inline void register_tools_from_config(const std::string& path){
 // =================== Register All ===================
 inline void register_all_tools(){
   REG.registerTool(make_show());
-  REG.registerTool(make_config());
+  REG.registerTool(make_setting());
   REG.registerTool(make_run());
   // git 从配置加载
   REG.registerTool(make_cd());

@@ -19,7 +19,7 @@
 
 #include "globals.hpp"
 #include "tools.hpp"
-#include "config.hpp"
+#include "settings.hpp"
 
 // ===== Global state definitions =====
 ToolRegistry REG;
@@ -27,22 +27,22 @@ CwdMode      g_cwd_mode = CwdMode::Full;
 bool         g_should_exit = false;
 std::string  g_parse_error_cmd;
 
-static const std::string kConfigPath = "./mycli_config.json";
+static const std::string kSettingsPath = "./mycli_settings.json";
 
-const std::string& config_file_path(){ return kConfigPath; }
+const std::string& settings_file_path(){ return kSettingsPath; }
 
 static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18n = {
-  {"show_config_output", {{"en", "theme = default\nmodel = alpha\n"}, {"zh", "主题 = default\n模型 = alpha\n"}}},
+  {"show_setting_output", {{"en", "theme = default\nmodel = alpha\n"}, {"zh", "主题 = default\n模型 = alpha\n"}}},
   {"show_logs_output",   {{"en", "3 fake log lines...\n2 fake log lines...\n1 fake log line...\n"}, {"zh", "3 行模拟日志...\n2 行模拟日志...\n1 行模拟日志...\n"}}},
-  {"show_usage",         {{"en", "usage: show [config|logs]"}, {"zh", "用法：show [config|logs]"}}},
-  {"config_get_usage",   {{"en", "usage: config get <key>"}, {"zh", "用法：config get <key>"}}},
-  {"config_unknown_key", {{"en", "unknown config key: {key}"}, {"zh", "未知配置项：{key}"}}},
-  {"config_get_value",   {{"en", "config {key} = {value}"}, {"zh", "配置 {key} = {value}"}}},
-  {"config_set_usage",   {{"en", "usage: config set <key> <value>"}, {"zh", "用法：config set <key> <value>"}}},
-  {"config_invalid_value", {{"en", "invalid value for {key}: {value}"}, {"zh", "配置 {key} 的值无效：{value}"}}},
-  {"config_set_success", {{"en", "updated {key} -> {value}"}, {"zh", "已更新 {key} -> {value}"}}},
-  {"config_list_header", {{"en", "Available config keys:"}, {"zh", "可用配置项："}}},
-  {"config_usage",       {{"en", "usage: config <get|set|list>"}, {"zh", "用法：config <get|set|list>"}}},
+  {"show_usage",         {{"en", "usage: show [setting|logs]"}, {"zh", "用法：show [setting|logs]"}}},
+  {"setting_get_usage",   {{"en", "usage: setting get <key>"}, {"zh", "用法：setting get <key>"}}},
+  {"setting_unknown_key", {{"en", "unknown setting key: {key}"}, {"zh", "未知设置项：{key}"}}},
+  {"setting_get_value",   {{"en", "setting {key} = {value}"}, {"zh", "设置 {key} = {value}"}}},
+  {"setting_set_usage",   {{"en", "usage: setting set <key> <value>"}, {"zh", "用法：setting set <key> <value>"}}},
+  {"setting_invalid_value", {{"en", "invalid value for {key}: {value}"}, {"zh", "设置 {key} 的值无效：{value}"}}},
+  {"setting_set_success", {{"en", "updated {key} -> {value}"}, {"zh", "已更新 {key} -> {value}"}}},
+  {"setting_list_header", {{"en", "Available setting keys:"}, {"zh", "可用设置项："}}},
+  {"setting_usage",       {{"en", "usage: setting <get|set|list>"}, {"zh", "用法：setting <get|set|list>"}}},
   {"cd_mode_updated",    {{"en", "prompt cwd mode set to {mode}"}, {"zh", "提示符目录模式已设为 {mode}"}}},
   {"cd_mode_error",      {{"en", "failed to update prompt mode"}, {"zh", "更新提示符模式失败"}}},
   {"cd_usage",           {{"en", "usage: cd <path> | cd -o [-a|-c]"}, {"zh", "用法：cd <path> | cd -o [-a|-c]"}}},
@@ -71,7 +71,7 @@ void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std:
 }
 
 std::string localized_tool_summary(const ToolSpec& spec){
-  auto it = spec.summaryLocales.find(g_config.language);
+  auto it = spec.summaryLocales.find(g_settings.language);
   if(it!=spec.summaryLocales.end() && !it->second.empty()) return it->second;
   auto en = spec.summaryLocales.find("en");
   if(en!=spec.summaryLocales.end() && !en->second.empty()) return en->second;
@@ -81,7 +81,7 @@ std::string localized_tool_summary(const ToolSpec& spec){
 std::string tr(const std::string& key){
   auto it = g_i18n.find(key);
   if(it!=g_i18n.end()){
-    auto jt = it->second.find(g_config.language);
+    auto jt = it->second.find(g_settings.language);
     if(jt!=it->second.end()) return jt->second;
     jt = it->second.find("en");
     if(jt!=it->second.end()) return jt->second;
@@ -117,8 +117,8 @@ MatchResult compute_match(const std::string& candidate, const std::string& patte
     res.matched = true;
     return res;
   }
-  bool ignoreCase = g_config.completionIgnoreCase;
-  bool subseq = g_config.completionSubsequence;
+  bool ignoreCase = g_settings.completionIgnoreCase;
+  bool subseq = g_settings.completionSubsequence;
   if(subseq){
     size_t p = 0;
     for(size_t i=0;i<candidate.size() && p<pattern.size();++i){
@@ -340,7 +340,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
   };
   const SubcommandSpec* sub=findSub();
 
-  if(spec.name == "config" && sub){
+  if(spec.name == "setting" && sub){
     auto positionalIndex = [&]()->std::optional<size_t>{
       bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
       size_t start = 2; // command + subcommand
@@ -357,7 +357,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
     if(positionalIndex){
       size_t idx = *positionalIndex;
       if((sub->name=="get" || sub->name=="set") && idx==0){
-        auto keys = config_list_keys();
+        auto keys = settings_list_keys();
         for(const auto& key : keys){
           MatchResult match = compute_match(key, sw.word);
           if(!match.matched) continue;
@@ -369,7 +369,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       }
       if(sub->name=="set" && idx==1){
         std::string keyName = (toks.size()>=3? toks[2] : "");
-        auto values = config_value_suggestions_for(keyName);
+        auto values = settings_value_suggestions_for(keyName);
         for(const auto& val : values){
           MatchResult match = compute_match(val, sw.word);
           if(!match.matched) continue;
@@ -487,7 +487,7 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   auto sw   = splitLastWord(buf);
   if(toks.empty() || sw.word.empty()) return std::nullopt;
   if(!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back()))) return std::nullopt;
-  if(!g_config.showPathErrorHint) return std::nullopt;
+  if(!g_settings.showPathErrorHint) return std::nullopt;
 
   if(toks[0] == "help") return std::nullopt;
   const ToolSpec* spec = REG.find(toks[0]);
@@ -702,8 +702,8 @@ static void printHelpOne(const std::string& name){
 // ===== Main =====
 int main(){
   std::setlocale(LC_CTYPE, "");
-  load_config(config_file_path());
-  apply_config_to_runtime();
+  load_settings(settings_file_path());
+  apply_settings_to_runtime();
 
   // 1) 注册内置工具与状态
   register_all_tools();

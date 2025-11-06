@@ -143,10 +143,10 @@ void register_all_tools();
 void register_status_providers();
 void register_tools_from_config(const std::string& path);
 
-// ===== Config support =====
+// ===== Settings support =====
 enum class MatchMode { Prefix, Subsequence };
 
-struct AppConfig {
+struct AppSettings {
   CwdMode cwdMode = CwdMode::Full;
   bool completionIgnoreCase = false;
   bool completionSubsequence = false;
@@ -154,19 +154,19 @@ struct AppConfig {
   bool showPathErrorHint = true;
 };
 
-extern AppConfig g_config;
+extern AppSettings g_settings;
 
-void load_config(const std::string& path);
-void save_config(const std::string& path);
-void apply_config_to_runtime();
+void load_settings(const std::string& path);
+void save_settings(const std::string& path);
+void apply_settings_to_runtime();
 
-bool config_get_value(const std::string& key, std::string& value);
-bool config_set_value(const std::string& key, const std::string& value, std::string& error);
-std::vector<std::string> config_list_keys();
+bool settings_get_value(const std::string& key, std::string& value);
+bool settings_set_value(const std::string& key, const std::string& value, std::string& error);
+std::vector<std::string> settings_list_keys();
 
 // ===== Localization =====
 std::string tr(const std::string& key);
 std::string trFmt(const std::string& key, const std::map<std::string, std::string>& values);
 std::string localized_tool_summary(const ToolSpec& spec);
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value);
-const std::string& config_file_path();
+const std::string& settings_file_path();
