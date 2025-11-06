@@ -166,6 +166,14 @@ ToDoManager::ToDoManager(){
 }
 
 void ToDoManager::initialize(){
+  ready_ = false;
+  storageDir_.clear();
+  if(!g_settings.todoStorageDir.empty()){
+    std::string err;
+    if(setupStorage(g_settings.todoStorageDir, err)){
+      return;
+    }
+  }
   loadConfig();
   if(ready_) loadData();
 }
@@ -181,6 +189,11 @@ void ToDoManager::loadConfig(){
   storageDir_ = todo_detail::trim(storageDir_);
   if(!storageDir_.empty()){
     ready_ = true;
+    try{
+      g_settings.todoStorageDir = std::filesystem::absolute(storageDir_).string();
+    }catch(const std::exception&){
+      g_settings.todoStorageDir = storageDir_;
+    }
   }
 }
 
@@ -206,6 +219,7 @@ bool ToDoManager::setupStorage(const std::string& path, std::string& err){
     std::filesystem::create_directories(finished);
     std::filesystem::create_directories(templates);
     storageDir_ = std::filesystem::absolute(p).string();
+    g_settings.todoStorageDir = storageDir_;
     ready_ = true;
     std::ofstream ofs(todo_detail::kConfigFile, std::ios::trunc);
     ofs<<storageDir_;
@@ -1488,7 +1502,10 @@ static void handleSetup(const std::vector<std::string>& toks){
   if(toks.size()<3){ std::cout<<ansi::RED<<"缺少目录"<<ansi::RESET<<"\n"; return; }
   std::string err;
   if(!ToDoManager::instance().setupStorage(toks[2], err)) std::cout<<ansi::RED<<err<<ansi::RESET<<"\n";
-  else std::cout<<"已设置目录\n";
+  else {
+    save_settings(settings_file_path());
+    std::cout<<"已设置目录\n";
+  }
 }
 
 static void handleTemplate(const std::vector<std::string>& toks){
@@ -1617,34 +1634,127 @@ static std::vector<std::string> todoKeywordsAfterName(){
   return {"Add","StartTime","Deadline","Tag","Urgency","ProgressPercent","ProgressStep","Template","Subtask","Pre","Post","Category","Per"};
 }
 
-static std::vector<std::string> timeSuggestionList(){
-  std::vector<std::string> suggestions = {
-    "yyyy.mm.dd aa:bb:cc","yyyy.mm.dd aa:bb","yyyy.mm.dd",
-    "+15m","+30m","+1h","+6h","+12h","+1d","+3d","+7d","+30d",
-    "per d","per 2d","per w","per 2w","per m","per y"
+static std::vector<std::string> periodSuggestionList(){
+  return {"per d","per 2d","per 3d","per w","per 2w","per m","per y"};
+}
+
+static bool isTimeTemplatePlaceholder(char c){
+  switch(c){
+    case 'y': case 'm': case 'd': case 'a': case 'b': case 'c':
+      return true;
+    default:
+      return false;
+  }
+}
+
+struct TimeTemplateMatch {
+  std::string text;
+  std::vector<int> positions;
+};
+
+static bool buildTimeTemplateMatch(const std::string& input, const std::string& templ, TimeTemplateMatch& out){
+  out.text.clear();
+  out.positions.clear();
+  size_t inputIndex = 0;
+  bool addedLiteral = false;
+  for(size_t i=0;i<templ.size();++i){
+    char t = templ[i];
+    if(isTimeTemplatePlaceholder(t)){
+      if(inputIndex < input.size()){
+        char ch = input[inputIndex];
+        if(!std::isdigit(static_cast<unsigned char>(ch))) return false;
+        out.text.push_back(ch);
+        out.positions.push_back(static_cast<int>(i));
+        ++inputIndex;
+        continue;
+      }
+      break;
+    }
+    if(inputIndex < input.size()){
+      char ch = input[inputIndex];
+      if(ch != t) return false;
+      out.text.push_back(t);
+      out.positions.push_back(static_cast<int>(i));
+      ++inputIndex;
+      continue;
+    }
+    out.text.push_back(t);
+    out.positions.push_back(static_cast<int>(i));
+    addedLiteral = true;
+    break;
+  }
+  if(inputIndex < input.size()) return false;
+  if(!addedLiteral && out.text.size() < input.size()) return false;
+  if(out.text.empty() && input.empty()){
+    // allow showing the template when nothing typed
+    return true;
+  }
+  return true;
+}
+
+static std::vector<std::string> relativeTimeSuggestionList(){
+  return {"+15m","+30m","+1h","+6h","+12h","+1d","+3d","+7d","+30d"};
+}
+
+static std::vector<std::string> sampleTimeValues(){
+  std::vector<std::string> values;
+  auto addUnique = [&](const std::string& v){
+    if(v.empty()) return;
+    if(std::find(values.begin(), values.end(), v)==values.end()) values.push_back(v);
   };
-  auto addUnique = [&](const std::string& value){
-    if(value.empty()) return;
-    if(std::find(suggestions.begin(), suggestions.end(), value)==suggestions.end()) suggestions.push_back(value);
-  };
-  auto now = std::chrono::system_clock::now();
-  auto addFromStamp = [&](const std::chrono::system_clock::time_point& tp){
+  auto addFrom = [&](const std::chrono::system_clock::time_point& tp){
     std::string stamp = ToDoManager::formatTime(tp);
+    addUnique(stamp);
     auto space = stamp.find(' ');
     if(space != std::string::npos){
       addUnique(stamp.substr(0, space));
       addUnique(stamp.substr(space+1));
-    }else{
-      addUnique(stamp);
     }
   };
-  addFromStamp(now);
-  addFromStamp(now + std::chrono::hours(24));
-  return suggestions;
+  auto now = std::chrono::system_clock::now();
+  addFrom(now);
+  addFrom(now + std::chrono::hours(24));
+  return values;
 }
 
-static std::vector<std::string> periodSuggestionList(){
-  return {"per d","per 2d","per 3d","per w","per 2w","per m","per y"};
+static Candidates timeCandidates(const std::string& buf){
+  Candidates cand;
+  auto sw = splitLastWord(buf);
+  std::set<std::string> seen;
+  auto addCandidate = [&](const std::string& insertion, const std::string& label, const std::vector<int>& positions){
+    if(seen.insert(label).second){
+      cand.items.push_back(sw.before + insertion);
+      cand.labels.push_back(label);
+      cand.matchPositions.push_back(positions);
+    }
+  };
+
+  static const std::vector<std::string> kTemplates = {
+    "yyyy.mm.dd aa:bb:cc","yyyy.mm.dd aa:bb","yyyy.mm.dd"
+  };
+  for(const auto& templ : kTemplates){
+    TimeTemplateMatch match;
+    if(buildTimeTemplateMatch(sw.word, templ, match)){
+      std::string insertion = match.text.empty()? sw.word : match.text;
+      addCandidate(insertion, templ, match.positions);
+    }
+  }
+
+  auto appendList = [&](const std::vector<std::string>& list){
+    for(const auto& item : list){
+      MatchResult m = compute_match(item, sw.word);
+      if(!sw.word.empty() && !m.matched) continue;
+      if(sw.word.empty() && !m.matched) m.matched = true;
+      if(!m.matched) continue;
+      addCandidate(item, item, m.positions);
+    }
+  };
+
+  appendList(relativeTimeSuggestionList());
+  appendList(periodSuggestionList());
+  appendList(sampleTimeValues());
+
+  return cand;
 }
 
 static Candidates listToCandidates(const std::vector<std::string>& list, const std::string& buf){
@@ -1700,7 +1810,7 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
         }
         if(tokenEquals(key, "StartTime") || tokenEquals(key, "Deadline")){
           matched = true;
-          return listToCandidates(timeSuggestionList(), buf);
+          return timeCandidates(buf);
         }
         if(tokenEquals(key, "Per")){
           matched = true;
@@ -1787,7 +1897,7 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
           return listToCandidates(subtaskNames(), buf);
         if((tokenEquals(last, "Percent") || tokenEquals(last, "Step")) && tokenEquals(prev, "Progress"))
           return Candidates{};
-        if(tokenEquals(last, "StartTime") || tokenEquals(last, "Deadline")) return listToCandidates(timeSuggestionList(), buf);
+        if(tokenEquals(last, "StartTime") || tokenEquals(last, "Deadline")) return timeCandidates(buf);
         if(tokenEquals(last, "Per")) return listToCandidates(periodSuggestionList(), buf);
         if((tokenEquals(last, "Pre") || tokenEquals(last, "Post") || tokenEquals(last, "Unpre") || tokenEquals(last, "Unpost")) && tokenEquals(prev, "Link"))
           return listToCandidates(mgr.taskNames(true), buf);
@@ -1810,7 +1920,7 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
           return listToCandidates(subtaskNames(), buf);
         if((tokenEquals(prev, "Percent") || tokenEquals(prev, "Step")) && tokenEquals(prev2, "Progress"))
           return Candidates{};
-        if(tokenEquals(prev, "StartTime") || tokenEquals(prev, "Deadline")) return listToCandidates(timeSuggestionList(), buf);
+        if(tokenEquals(prev, "StartTime") || tokenEquals(prev, "Deadline")) return timeCandidates(buf);
         if(tokenEquals(prev, "Per")) return listToCandidates(periodSuggestionList(), buf);
         if(tokenEquals(prev, "Link")) return listToCandidates(linkModes, buf);
         if((tokenEquals(prev, "Pre") || tokenEquals(prev, "Post") || tokenEquals(prev, "Unpre") || tokenEquals(prev, "Unpost")) && tokenEquals(prev2, "Link"))
@@ -1831,18 +1941,26 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
       }
     }
     if(toks.size()>=3 && toks.back()==sw.word){
-      auto suggestions = timeSuggestionList();
-      suggestions.push_back("Tag");
-      return listToCandidates(suggestions, buf);
+      Candidates base = timeCandidates(buf);
+      MatchResult match = compute_match("Tag", sw.word);
+      if((sw.word.empty() && !match.matched) || match.matched){
+        base.items.push_back(sw.before + "Tag");
+        base.labels.push_back("Tag");
+        if(match.matched) base.matchPositions.push_back(match.positions);
+        else base.matchPositions.push_back({});
+      }
+      return base;
     }
     if(toks.size()>=4 && tokenEquals(toks[toks.size()-2], "Tag") && toks.back()==sw.word){
       std::vector<std::string> cats(mgr.categorySet().begin(), mgr.categorySet().end());
       return listToCandidates(cats, buf);
     }
     if(sw.word.empty() && toks.size()>=3){
-      auto suggestions = timeSuggestionList();
-      suggestions.push_back("Tag");
-      return listToCandidates(suggestions, buf);
+      Candidates base = timeCandidates(buf);
+      base.items.push_back(sw.before + "Tag");
+      base.labels.push_back("Tag");
+      base.matchPositions.push_back({});
+      return base;
     }
   }else if(tokenEquals(cmd, "Today")){
     if(toks.size()==3 && toks.back()==sw.word) return listToCandidates({"Deadline"}, buf);

@@ -170,6 +170,14 @@ inline ToolSpec make_setting(){
         return;
       }
       save_settings(settings_file_path());
+      if(key=="todo.storage_dir"){
+        std::string err;
+        if(!ToDoManager::instance().setupStorage(g_settings.todoStorageDir, err)){
+          std::cout<<ansi::RED<<err<<ansi::RESET<<"\n";
+          g_parse_error_cmd="setting";
+          return;
+        }
+      }
       std::cout<<trFmt("setting_set_success", {{"key", key}, {"value", value}})<<"\n";
     }},
     SubcommandSpec{"list", {}, {}, {}, [](const std::vector<std::string>&){

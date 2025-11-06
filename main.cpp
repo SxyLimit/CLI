@@ -372,6 +372,9 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       }
       if(sub->name=="set" && idx==1){
         std::string keyName = (toks.size()>=3? toks[2] : "");
+        if(auto pk = settings_value_path_kind(keyName)){
+          return pathCandidatesForWord(buf, sw.word, *pk);
+        }
         auto values = settings_value_suggestions_for(keyName);
         for(const auto& val : values){
           MatchResult match = compute_match(val, sw.word);

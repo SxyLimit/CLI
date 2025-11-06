@@ -2,6 +2,8 @@
 
 #include "globals.hpp"
 
+#include <filesystem>
+#include <optional>
 #include <sstream>
 
 inline AppSettings g_settings{};
@@ -10,11 +12,13 @@ enum class SettingValueKind {
   Boolean,
   Enum,
   String,
+  Directory,
 };
 
 struct SettingKeyInfo {
   SettingValueKind kind = SettingValueKind::String;
   std::vector<std::string> allowedValues;
+  PathKind pathKind = PathKind::Any;
 };
 
 namespace {
@@ -31,6 +35,7 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"completion.subsequence", {SettingValueKind::Boolean, {"false", "true"}}},
     {"language", {SettingValueKind::String, {}}},
     {"ui.path_error_hint", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"todo.storage_dir", {SettingValueKind::Directory, {}, PathKind::Dir}},
   };
   return infos;
 }
@@ -100,6 +105,8 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
         out.assign(langs.begin(), langs.end());
       }
       break;
+    case SettingValueKind::Directory:
+      break;
   }
   return out;
 }
@@ -107,6 +114,11 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
 inline void load_settings(const std::string& path){
   AppSettings defaults;
   g_settings = defaults;
+  try{
+    g_settings.todoStorageDir = std::filesystem::absolute(std::filesystem::current_path()).string();
+  }catch(const std::exception&){
+    g_settings.todoStorageDir = std::string(".");
+  }
 
   settings_register_language("en");
   settings_register_language("zh");
@@ -140,6 +152,16 @@ inline void load_settings(const std::string& path){
       if(!val.empty()){ g_settings.language = val; settings_register_language(val); }
     }else if(key=="ui.path_error_hint"){
       bool b; if(parseBool(val,b)) g_settings.showPathErrorHint = b;
+    }else if(key=="todo.storage_dir"){
+      if(!val.empty()){
+        try{
+          std::filesystem::path p = val;
+          if(!p.is_absolute()) p = std::filesystem::absolute(p);
+          g_settings.todoStorageDir = p.string();
+        }catch(const std::exception&){
+          // keep default
+        }
+      }
     }
   }
 }
@@ -152,6 +174,7 @@ inline void save_settings(const std::string& path){
   out << "completion.subsequence=" << (g_settings.completionSubsequence? "true" : "false") << "\n";
   out << "language=" << g_settings.language << "\n";
   out << "ui.path_error_hint=" << (g_settings.showPathErrorHint? "true" : "false") << "\n";
+  out << "todo.storage_dir=" << g_settings.todoStorageDir << "\n";
 }
 
 inline void apply_settings_to_runtime(){
@@ -173,6 +196,9 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="ui.path_error_hint"){
     value = g_settings.showPathErrorHint? "true" : "false"; return true;
+  }
+  if(key=="todo.storage_dir"){
+    value = g_settings.todoStorageDir; return true;
   }
   return false;
 }
@@ -224,6 +250,29 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     g_settings.showPathErrorHint = b;
     return true;
   }
+  if(key=="todo.storage_dir"){
+    if(value.empty()){
+      error = "invalid_value";
+      return false;
+    }
+    try{
+      std::filesystem::path p = value;
+      if(!p.is_absolute()) p = std::filesystem::absolute(p);
+      if(std::filesystem::exists(p)){
+        if(!std::filesystem::is_directory(p)){
+          error = "invalid_value";
+          return false;
+        }
+      }else{
+        std::filesystem::create_directories(p);
+      }
+      g_settings.todoStorageDir = p.string();
+      return true;
+    }catch(const std::exception&){
+      error = "invalid_value";
+      return false;
+    }
+  }
   error = "unknown_key";
   return false;
 }
@@ -233,4 +282,11 @@ inline std::vector<std::string> settings_list_keys(){
   for(const auto& kv : keyInfoMap()) keys.push_back(kv.first);
   std::sort(keys.begin(), keys.end());
   return keys;
+}
+
+inline std::optional<PathKind> settings_value_path_kind(const std::string& key){
+  const SettingKeyInfo* info = settings_key_info(key);
+  if(!info) return std::nullopt;
+  if(info->kind == SettingValueKind::Directory) return info->pathKind;
+  return std::nullopt;
 }
