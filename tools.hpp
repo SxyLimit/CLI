@@ -2,7 +2,7 @@
 #include "globals.hpp"
 
 // ===== Path candidates (inline) =====
-inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word){
+inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind){
   Candidates out;
   std::string dir, base;
   if (!word.empty() && word.back()=='/'){ dir=word; base=""; }
@@ -15,7 +15,14 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
     if(!base.empty() && !startsWith(name, base)) continue;
     std::string cand = dir + name;
     struct stat st{}; std::string pth = root + (root.back()=='/'? "" : "/") + name;
-    if(::stat(pth.c_str(), &st)==0 && S_ISDIR(st.st_mode)) cand += "/";
+    bool isDir=false, isFile=false;
+    if(::stat(pth.c_str(), &st)==0){
+      isDir = S_ISDIR(st.st_mode);
+      isFile = S_ISREG(st.st_mode);
+    }
+    bool accept = (kind==PathKind::Any) || (kind==PathKind::Dir && isDir) || (kind==PathKind::File && isFile);
+    if(!accept) continue;
+    if(isDir) cand += "/";
     out.items.push_back(sw.before + cand);
     out.labels.push_back(cand);
   }
@@ -143,7 +150,7 @@ inline ToolSpec make_run(){
 inline ToolSpec make_cd(){
   // -o: Omit；-o -a: Hidden；-o -c: Full；否则 cd <path>
   ToolSpec t; t.name="cd"; t.summary="Change directory; -o (omit); -o -a (hide); -o -c (full)";
-  t.positional={"<path>"}; // 关键：占位符含 <path> → 统一路径补全能力
+  t.positional={"<dir>"}; // 关键：占位符含 <dir> → 自动路径补全并限制目录
   t.handler=[](const std::vector<std::string>& a){
     bool flag_o=false, flag_a=false, flag_c=false;
     std::vector<std::string> rest;
