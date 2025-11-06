@@ -340,6 +340,48 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
   };
   const SubcommandSpec* sub=findSub();
 
+  if(spec.name == "config" && sub){
+    auto positionalIndex = [&]()->std::optional<size_t>{
+      bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
+      size_t start = 2; // command + subcommand
+      size_t count = 0;
+      for(size_t i=start; i<toks.size(); ++i){
+        bool isCurrent = (!trailingSpace && i + 1 == toks.size() && toks[i] == sw.word);
+        if(isCurrent) return count;
+        count++;
+      }
+      if(trailingSpace) return count;
+      return std::nullopt;
+    }();
+
+    if(positionalIndex){
+      size_t idx = *positionalIndex;
+      if((sub->name=="get" || sub->name=="set") && idx==0){
+        auto keys = config_list_keys();
+        for(const auto& key : keys){
+          MatchResult match = compute_match(key, sw.word);
+          if(!match.matched) continue;
+          out.items.push_back(sw.before + key);
+          out.labels.push_back(key);
+          out.matchPositions.push_back(match.positions);
+        }
+        if(!out.items.empty()) return out;
+      }
+      if(sub->name=="set" && idx==1){
+        std::string keyName = (toks.size()>=3? toks[2] : "");
+        auto values = config_value_suggestions_for(keyName);
+        for(const auto& val : values){
+          MatchResult match = compute_match(val, sw.word);
+          if(!match.matched) continue;
+          out.items.push_back(sw.before + val);
+          out.labels.push_back(val);
+          out.matchPositions.push_back(match.positions);
+        }
+        if(!out.items.empty()) return out;
+      }
+    }
+  }
+
   // 值补全（包含路径型选项）
   if(toks.size()>=2){
     std::string prev = (toks.back()==sw.word && toks.size()>=2) ? toks[toks.size()-2] : (!toks.empty()? toks.back():"");

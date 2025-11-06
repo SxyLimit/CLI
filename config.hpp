@@ -6,7 +6,33 @@
 
 inline AppConfig g_config{};
 
+enum class ConfigValueKind {
+  Boolean,
+  Enum,
+  String,
+};
+
+struct ConfigKeyInfo {
+  ConfigValueKind kind = ConfigValueKind::String;
+  std::vector<std::string> allowedValues;
+};
+
 namespace {
+
+std::vector<std::string>& languageStorage(){
+  static std::vector<std::string> langs = {"en", "zh"};
+  return langs;
+}
+
+const std::map<std::string, ConfigKeyInfo>& keyInfoMap(){
+  static const std::map<std::string, ConfigKeyInfo> infos = {
+    {"prompt.cwd", {ConfigValueKind::Enum, {"full", "omit", "hidden"}}},
+    {"completion.ignore_case", {ConfigValueKind::Boolean, {"false", "true"}}},
+    {"completion.subsequence", {ConfigValueKind::Boolean, {"false", "true"}}},
+    {"language", {ConfigValueKind::String, {}}},
+  };
+  return infos;
+}
 
 std::string normalizeBool(const std::string& v){
   std::string t = v; std::transform(t.begin(), t.end(), t.begin(), ::tolower);
@@ -37,21 +63,52 @@ bool parseCwdMode(const std::string& v, CwdMode& out){
   return false;
 }
 
-const std::vector<std::string>& knownKeys(){
-  static const std::vector<std::string> keys = {
-    "prompt.cwd",
-    "completion.ignore_case",
-    "completion.subsequence",
-    "language"
-  };
-  return keys;
 }
 
+inline void config_register_language(const std::string& lang){
+  if(lang.empty()) return;
+  auto& langs = languageStorage();
+  if(std::find(langs.begin(), langs.end(), lang)==langs.end()){
+    langs.push_back(lang);
+  }
+}
+
+inline const std::vector<std::string>& config_known_languages(){
+  return languageStorage();
+}
+
+inline const ConfigKeyInfo* config_key_info(const std::string& key){
+  const auto& map = keyInfoMap();
+  auto it = map.find(key);
+  if(it==map.end()) return nullptr;
+  return &it->second;
+}
+
+inline std::vector<std::string> config_value_suggestions_for(const std::string& key){
+  std::vector<std::string> out;
+  const ConfigKeyInfo* info = config_key_info(key);
+  if(!info) return out;
+  switch(info->kind){
+    case ConfigValueKind::Boolean:
+    case ConfigValueKind::Enum:
+      out = info->allowedValues;
+      break;
+    case ConfigValueKind::String:
+      if(key=="language"){
+        const auto& langs = config_known_languages();
+        out.assign(langs.begin(), langs.end());
+      }
+      break;
+  }
+  return out;
 }
 
 inline void load_config(const std::string& path){
   AppConfig defaults;
   g_config = defaults;
+
+  config_register_language("en");
+  config_register_language("zh");
 
   std::ifstream in(path);
   if(!in.good()) return;
@@ -79,7 +136,7 @@ inline void load_config(const std::string& path){
     }else if(key=="completion.subsequence"){
       bool b; if(parseBool(val,b)) g_config.completionSubsequence = b;
     }else if(key=="language"){
-      if(!val.empty()) g_config.language = val;
+      if(!val.empty()){ g_config.language = val; config_register_language(val); }
     }
   }
 }
@@ -148,6 +205,7 @@ inline bool config_set_value(const std::string& key, const std::string& value, s
       return false;
     }
     g_config.language = value;
+    config_register_language(value);
     return true;
   }
   error = "unknown_key";
@@ -155,5 +213,8 @@ inline bool config_set_value(const std::string& key, const std::string& value, s
 }
 
 inline std::vector<std::string> config_list_keys(){
-  return knownKeys();
+  std::vector<std::string> keys;
+  for(const auto& kv : keyInfoMap()) keys.push_back(kv.first);
+  std::sort(keys.begin(), keys.end());
+  return keys;
 }
