@@ -52,8 +52,19 @@ def load_history() -> List[Dict[str, Any]]:
 
 def save_history(items: List[Dict[str, Any]]) -> None:
     HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with HISTORY_PATH.open("w", encoding="utf-8") as fp:
-        json.dump(items, fp, ensure_ascii=False, indent=2)
+    tmp_path = HISTORY_PATH.with_suffix(".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as fp:
+            json.dump(items, fp, ensure_ascii=False, indent=2)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(tmp_path, HISTORY_PATH)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def call_openai(prompt: str) -> str:
