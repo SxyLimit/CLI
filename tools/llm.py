@@ -5,16 +5,10 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List
+from prompts import SYSTEM_PROMPT
 
-HISTORY_PATH = Path(os.path.expanduser("~/.mycli_llm_history.json"))
+HISTORY_PATH = Path(os.path.expanduser("mycli_llm_history.json"))
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
-
-DEFAULT_SYSTEM_PROMPT = (
-    "你是 Kimi，由 Moonshot AI 提供的人工智能助手，你更擅长中文和英文的对话。"
-    "你会为用户提供安全，有帮助，准确的回答。同时，你会拒绝一切涉及恐怖主义，"
-    "种族歧视，黄色暴力等问题的回答。Moonshot AI 为专有名词，不可翻译成其他语言。"
-)
-
 
 def load_env_file() -> None:
     if not ENV_PATH.exists():
@@ -71,7 +65,6 @@ def call_openai(prompt: str) -> str:
     api_key = os.getenv("LLM_API_KEY", "").strip() or os.getenv("MOONSHOT_API_KEY", "").strip()
     base_url = os.getenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
     model = os.getenv("LLM_MODEL", "kimi-k2-turbo-preview")
-    system_prompt = os.getenv("LLM_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
     temperature_raw = os.getenv("LLM_TEMPERATURE", "0.6")
     try:
         temperature = float(temperature_raw)
@@ -91,7 +84,7 @@ def call_openai(prompt: str) -> str:
         completion = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             temperature=temperature,
