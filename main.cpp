@@ -549,8 +549,27 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   }
   bool isDir = S_ISDIR(st.st_mode);
   bool isFile = S_ISREG(st.st_mode);
-  if(expected == PathKind::Dir && !isDir) return tr("path_error_need_dir");
-  if(expected == PathKind::File && !isFile) return tr("path_error_need_file");
+
+  auto hasMatchingCandidateOfType = [&](PathKind kind){
+    for(const auto& label : cand.labels){
+      MatchResult match = compute_match(label, sw.word);
+      if(!match.matched) continue;
+      bool candIsDir = (!label.empty() && label.back()=='/');
+      if(kind == PathKind::Dir && candIsDir) return true;
+      if(kind == PathKind::File && !candIsDir) return true;
+      if(kind == PathKind::Any) return true;
+    }
+    return false;
+  };
+
+  if(expected == PathKind::Dir && !isDir){
+    if(hasMatchingCandidateOfType(PathKind::Dir)) return std::nullopt;
+    return tr("path_error_need_dir");
+  }
+  if(expected == PathKind::File && !isFile){
+    if(hasMatchingCandidateOfType(PathKind::File)) return std::nullopt;
+    return tr("path_error_need_file");
+  }
   return std::nullopt;
 }
 
