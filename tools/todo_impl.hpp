@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -1602,12 +1603,23 @@ ToolSpec make_todo_tool(){
   return t;
 }
 
+static std::string lowerCopy(const std::string& v){
+  std::string out = v;
+  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+  return out;
+}
+
+static bool tokenEquals(const std::string& a, const std::string& b){
+  return lowerCopy(a) == lowerCopy(b);
+}
+
 static std::vector<std::string> todoKeywordsAfterName(){
   return {"Add","StartTime","Deadline","Tag","Urgency","ProgressPercent","ProgressStep","Template","Subtask","Pre","Post","Category","Per"};
 }
 
 static std::vector<std::string> timeSuggestionList(){
   std::vector<std::string> suggestions = {
+    "yyyy.mm.dd aa:bb:cc","yyyy.mm.dd aa:bb","yyyy.mm.dd",
     "+15m","+30m","+1h","+6h","+12h","+1d","+3d","+7d","+30d",
     "per d","per 2d","per w","per 2w","per m","per y"
   };
@@ -1662,97 +1674,197 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
   }
   const std::string& cmd = toks[1];
   ToDoManager& mgr = ToDoManager::instance();
-  if(cmd=="Creat"){
+  if(tokenEquals(cmd, "Creat")){
     if(toks.size()==2 || (toks.size()==3 && toks.back()==sw.word)){
       return empty;
     }
     if(toks.size()>=3){
+      auto keywords = todoKeywordsAfterName();
+      auto categories = [&](){
+        std::vector<std::string> cats(mgr.categorySet().begin(), mgr.categorySet().end());
+        return cats;
+      };
+      auto tasks = [&](){ return mgr.taskNames(true); };
+      auto valueSuggestions = [&](const std::string& key, bool& matched)->Candidates{
+        if(tokenEquals(key, "Tag") || tokenEquals(key, "Category")){
+          matched = true;
+          return listToCandidates(categories(), buf);
+        }
+        if(tokenEquals(key, "Urgency")){
+          matched = true;
+          return listToCandidates(kUrgencyLevels, buf);
+        }
+        if(tokenEquals(key, "Template")){
+          matched = true;
+          return listToCandidates(mgr.templateNames(), buf);
+        }
+        if(tokenEquals(key, "StartTime") || tokenEquals(key, "Deadline")){
+          matched = true;
+          return listToCandidates(timeSuggestionList(), buf);
+        }
+        if(tokenEquals(key, "Per")){
+          matched = true;
+          return listToCandidates(periodSuggestionList(), buf);
+        }
+        if(tokenEquals(key, "Pre") || tokenEquals(key, "Post")){
+          matched = true;
+          return listToCandidates(tasks(), buf);
+        }
+        matched = false;
+        return Candidates{};
+      };
+      auto keywordList = [&](){ return listToCandidates(keywords, buf); };
       if(sw.word.empty()){
-        return listToCandidates(todoKeywordsAfterName(), buf);
+        if(!toks.empty()){
+          const std::string& last = toks.back();
+          if(tokenEquals(last, "StartTime") || tokenEquals(last, "Deadline") ||
+             tokenEquals(last, "Tag") || tokenEquals(last, "Category") ||
+             tokenEquals(last, "Urgency") || tokenEquals(last, "Template") ||
+             tokenEquals(last, "Per") || tokenEquals(last, "Pre") || tokenEquals(last, "Post")){
+            bool matched=false;
+            Candidates cand = valueSuggestions(last, matched);
+            if(matched) return cand;
+          }
+        }
+        return keywordList();
       }
       if(toks.size()>=4 && toks.back()==sw.word){
         std::string prev = toks[toks.size()-2];
-        if(prev=="Tag" || prev=="Category"){
-          std::vector<std::string> cats(mgr.categorySet().begin(), mgr.categorySet().end());
-          return listToCandidates(cats, buf);
+        if(tokenEquals(prev, toks[2])){
+          return keywordList();
         }
-        if(prev=="Urgency") return listToCandidates(kUrgencyLevels, buf);
-        if(prev=="Template") return listToCandidates(mgr.templateNames(), buf);
-        if(prev=="StartTime" || prev=="Deadline") return listToCandidates(timeSuggestionList(), buf);
-        if(prev=="Per") return listToCandidates(periodSuggestionList(), buf);
+        bool matched=false;
+        Candidates cand = valueSuggestions(prev, matched);
+        if(matched) return cand;
       }
+      if(toks.size()>=4){
+        const std::string& prev = toks.back();
+        if(tokenEquals(prev, "StartTime") || tokenEquals(prev, "Deadline") ||
+           tokenEquals(prev, "Tag") || tokenEquals(prev, "Category") ||
+           tokenEquals(prev, "Urgency") || tokenEquals(prev, "Template") ||
+           tokenEquals(prev, "Per") || tokenEquals(prev, "Pre") || tokenEquals(prev, "Post")){
+          bool matched=false;
+          Candidates cand = valueSuggestions(prev, matched);
+          if(matched) return cand;
+        }
+      }
+      return keywordList();
     }
-  }else if(cmd=="Updata"){
+  }else if(tokenEquals(cmd, "Updata")){
     if(toks.size()==2 || (toks.size()==3 && toks.back()==sw.word)){
       return listToCandidates(mgr.taskNames(), buf);
     }
     if(toks.size()>=3){
-      if(toks.size()==4 && toks.back()==sw.word){
-        return listToCandidates({"Add","Reset","Tag","Urgency","Progress","Template","Subtask","Link","Category"}, buf);
-      }
-      std::string prev = toks[toks.size()-2];
-      if(prev=="Tag" || prev=="Category"){
-        if(toks.back()==sw.word) return listToCandidates({"Add","Remove"}, buf);
-      }
-      if(prev=="Urgency" && toks.back()==sw.word) return listToCandidates(kUrgencyLevels, buf);
-      if(prev=="Progress" && toks.back()==sw.word) return listToCandidates({"Percent","Step"}, buf);
-      if((prev=="StartTime" || prev=="Deadline") && toks.back()==sw.word) return listToCandidates(timeSuggestionList(), buf);
-      if(prev=="Per" && toks.back()==sw.word) return listToCandidates(periodSuggestionList(), buf);
-      if(prev=="Template" && toks.back()==sw.word) return listToCandidates({"Apply","Remove"}, buf);
-      if(prev=="Subtask" && toks.back()==sw.word) return listToCandidates({"Add","Remove","Percent","Step"}, buf);
-      if((prev=="Apply"||prev=="Remove") && toks.size()>=5 && toks.back()==sw.word){
-        return listToCandidates(mgr.templateNames(), buf);
-      }
-      if(prev=="Link" && toks.back()==sw.word) return listToCandidates({"Pre","Post","Unpre","Unpost"}, buf);
-      if((prev=="Pre"||prev=="Post"||prev=="Unpre"||prev=="Unpost") && toks.back()==sw.word){
-        return listToCandidates(mgr.taskNames(true), buf);
-      }
-      if((prev=="Add"||prev=="Remove") && toks.size()>=5){
-        std::string prev2 = toks[toks.size()-3];
-        if(prev2=="Tag"||prev2=="Category"){
-          std::vector<std::string> cats(mgr.categorySet().begin(), mgr.categorySet().end());
-          return listToCandidates(cats, buf);
-        }
-      }
-      if((prev=="Percent"||prev=="Step") && toks.size()>=5 && toks.back()==sw.word){
+      auto cats = [&](){ std::vector<std::string> v(mgr.categorySet().begin(), mgr.categorySet().end()); return v; };
+      auto topLevel = std::vector<std::string>{"Add","Reset","Tag","Urgency","Progress","Template","Subtask","Link","Category"};
+      auto showTopLevel = [&](){ return listToCandidates(topLevel, buf); };
+      auto subtaskNames = [&](){
+        std::vector<std::string> names;
         auto task = mgr.findTask(toks[2]);
-        if(task){
-          std::vector<std::string> names;
-          for(auto &st : task->subtasks) names.push_back(st.name);
-          return listToCandidates(names, buf);
-        }
+        if(task){ for(auto &st : task->subtasks) names.push_back(st.name); }
+        return names;
+      };
+      auto linkModes = std::vector<std::string>{"Pre","Post","Unpre","Unpost"};
+      auto templateActions = std::vector<std::string>{"Apply","Remove"};
+      auto progressModes = std::vector<std::string>{"Percent","Step"};
+      std::string last = toks.back();
+      std::string prev = toks.size()>=2? toks[toks.size()-2] : std::string();
+      std::string prev2 = toks.size()>=3? toks[toks.size()-3] : std::string();
+
+      if(sw.word.empty()){
+        if(tokenEquals(last, "Tag") || tokenEquals(last, "Category")) return listToCandidates({"Add","Remove"}, buf);
+        if((tokenEquals(last, "Add") || tokenEquals(last, "Remove")) && (tokenEquals(prev, "Tag") || tokenEquals(prev, "Category")))
+          return listToCandidates(cats(), buf);
+        if(tokenEquals(last, "Urgency")) return listToCandidates(kUrgencyLevels, buf);
+        if(tokenEquals(last, "Progress")) return listToCandidates(progressModes, buf);
+        if(tokenEquals(last, "Reset")) return listToCandidates({"StartTime","Deadline"}, buf);
+        if(tokenEquals(last, "Template")) return listToCandidates(templateActions, buf);
+        if(tokenEquals(last, "Subtask")) return listToCandidates({"Add","Remove","Percent","Step"}, buf);
+        if(tokenEquals(last, "Link")) return listToCandidates(linkModes, buf);
+        if((tokenEquals(last, "Apply") || tokenEquals(last, "Remove")) && tokenEquals(prev, "Template"))
+          return listToCandidates(mgr.templateNames(), buf);
+        if((tokenEquals(last, "Percent") || tokenEquals(last, "Step")) && tokenEquals(prev, "Subtask"))
+          return listToCandidates(subtaskNames(), buf);
+        if((tokenEquals(last, "Percent") || tokenEquals(last, "Step")) && tokenEquals(prev, "Progress"))
+          return Candidates{};
+        if(tokenEquals(last, "StartTime") || tokenEquals(last, "Deadline")) return listToCandidates(timeSuggestionList(), buf);
+        if(tokenEquals(last, "Per")) return listToCandidates(periodSuggestionList(), buf);
+        if((tokenEquals(last, "Pre") || tokenEquals(last, "Post") || tokenEquals(last, "Unpre") || tokenEquals(last, "Unpost")) && tokenEquals(prev, "Link"))
+          return listToCandidates(mgr.taskNames(true), buf);
+        return showTopLevel();
+      }
+
+      if(toks.back()==sw.word){
+        if(tokenEquals(prev, toks[2])) return showTopLevel();
+        if(tokenEquals(prev, "Tag") || tokenEquals(prev, "Category")) return listToCandidates({"Add","Remove"}, buf);
+        if((tokenEquals(prev, "Add") || tokenEquals(prev, "Remove")) && (tokenEquals(prev2, "Tag") || tokenEquals(prev2, "Category")))
+          return listToCandidates(cats(), buf);
+        if(tokenEquals(prev, "Urgency")) return listToCandidates(kUrgencyLevels, buf);
+        if(tokenEquals(prev, "Progress")) return listToCandidates(progressModes, buf);
+        if(tokenEquals(prev, "Reset")) return listToCandidates({"StartTime","Deadline"}, buf);
+        if(tokenEquals(prev, "Template")) return listToCandidates(templateActions, buf);
+        if((tokenEquals(prev, "Apply") || tokenEquals(prev, "Remove")) && tokenEquals(prev2, "Template"))
+          return listToCandidates(mgr.templateNames(), buf);
+        if(tokenEquals(prev, "Subtask")) return listToCandidates({"Add","Remove","Percent","Step"}, buf);
+        if((tokenEquals(prev, "Percent") || tokenEquals(prev, "Step")) && tokenEquals(prev2, "Subtask"))
+          return listToCandidates(subtaskNames(), buf);
+        if((tokenEquals(prev, "Percent") || tokenEquals(prev, "Step")) && tokenEquals(prev2, "Progress"))
+          return Candidates{};
+        if(tokenEquals(prev, "StartTime") || tokenEquals(prev, "Deadline")) return listToCandidates(timeSuggestionList(), buf);
+        if(tokenEquals(prev, "Per")) return listToCandidates(periodSuggestionList(), buf);
+        if(tokenEquals(prev, "Link")) return listToCandidates(linkModes, buf);
+        if((tokenEquals(prev, "Pre") || tokenEquals(prev, "Post") || tokenEquals(prev, "Unpre") || tokenEquals(prev, "Unpost")) && tokenEquals(prev2, "Link"))
+          return listToCandidates(mgr.taskNames(true), buf);
       }
     }
-  }else if(cmd=="Delete"){
+  }else if(tokenEquals(cmd, "Delete")){
     if(toks.size()==2 || (toks.size()==3 && toks.back()==sw.word)) return listToCandidates(mgr.taskNames(), buf);
     if(toks.size()>=3 && toks.back()==sw.word) return listToCandidates({"per"}, buf);
-  }else if(cmd=="Query"){
+    if(sw.word.empty() && !toks.empty() && tokenEquals(toks.back(), "per")) return listToCandidates({"per"}, buf);
+  }else if(tokenEquals(cmd, "Query")){
     if(toks.size()==2) return empty;
+    if(sw.word.empty() && toks.size()>=3){
+      const std::string& last = toks.back();
+      if(tokenEquals(last, "Tag")){
+        std::vector<std::string> cats(mgr.categorySet().begin(), mgr.categorySet().end());
+        return listToCandidates(cats, buf);
+      }
+    }
     if(toks.size()>=3 && toks.back()==sw.word){
       auto suggestions = timeSuggestionList();
       suggestions.push_back("Tag");
       return listToCandidates(suggestions, buf);
     }
-    if(toks.size()>=4 && toks[toks.size()-2]=="Tag" && toks.back()==sw.word){
+    if(toks.size()>=4 && tokenEquals(toks[toks.size()-2], "Tag") && toks.back()==sw.word){
       std::vector<std::string> cats(mgr.categorySet().begin(), mgr.categorySet().end());
       return listToCandidates(cats, buf);
     }
-  }else if(cmd=="Today"){
+    if(sw.word.empty() && toks.size()>=3){
+      auto suggestions = timeSuggestionList();
+      suggestions.push_back("Tag");
+      return listToCandidates(suggestions, buf);
+    }
+  }else if(tokenEquals(cmd, "Today")){
     if(toks.size()==3 && toks.back()==sw.word) return listToCandidates({"Deadline"}, buf);
-  }else if(cmd=="QueryDetail" || cmd=="QueryLast"){
+    if(sw.word.empty() && toks.size()>=3 && tokenEquals(toks.back(), "Deadline")) return listToCandidates({"Deadline"}, buf);
+  }else if(tokenEquals(cmd, "QueryDetail") || tokenEquals(cmd, "QueryLast")){
     if(toks.size()==2 || (toks.size()==3 && toks.back()==sw.word)) return listToCandidates(mgr.taskNames(true), buf);
-  }else if(cmd=="Finished"){
+    if(sw.word.empty() && toks.size()>=3) return listToCandidates(mgr.taskNames(true), buf);
+  }else if(tokenEquals(cmd, "Finished")){
     if(toks.size()==3 && toks.back()==sw.word) return listToCandidates({"clear"}, buf);
-  }else if(cmd=="Template"){
+    if(sw.word.empty() && toks.size()>=3 && tokenEquals(toks.back(), "clear")) return listToCandidates({"clear"}, buf);
+  }else if(tokenEquals(cmd, "Template")){
     if(toks.size()==2 || (toks.size()==3 && toks.back()==sw.word)) return listToCandidates({"Creat","Delete","List","Show"}, buf);
+    if(sw.word.empty() && toks.size()>=3 && tokenEquals(toks.back(), "Creat"))
+      return listToCandidates({"Tag","Urgency","ProgressPercent","ProgressStep","Subtask","Pre","Post"}, buf);
     if(toks.size()>=4){
-      if(toks[2]=="Delete" && toks.back()==sw.word) return listToCandidates(mgr.templateNames(), buf);
-      if(toks[2]=="Show" && toks.back()==sw.word) return listToCandidates(mgr.templateNames(), buf);
-      if(toks[2]=="Creat" && toks.back()==sw.word){
+      if(tokenEquals(toks[2], "Delete") && toks.back()==sw.word) return listToCandidates(mgr.templateNames(), buf);
+      if(tokenEquals(toks[2], "Show") && toks.back()==sw.word) return listToCandidates(mgr.templateNames(), buf);
+      if(tokenEquals(toks[2], "Creat") && toks.back()==sw.word){
         return listToCandidates({"Tag","Urgency","ProgressPercent","ProgressStep","Subtask","Pre","Post"}, buf);
       }
     }
-  }else if(cmd=="Setup"){
+  }else if(tokenEquals(cmd, "Setup")){
     if(toks.size()>=3 && toks.back()==sw.word){
       return pathCandidatesForWord(buf, sw.word, PathKind::Dir);
     }
