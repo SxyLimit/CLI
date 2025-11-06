@@ -315,6 +315,28 @@ void llm_mark_seen(){
   g_llm_watcher.seenSize = g_llm_watcher.knownSize;
 }
 
+static size_t utf8CharLength(unsigned char lead){
+  if(lead < 0x80) return 1;
+  if((lead & 0xE0) == 0xC0) return 2;
+  if((lead & 0xF0) == 0xE0) return 3;
+  if((lead & 0xF8) == 0xF0) return 4;
+  return 1;
+}
+
+static void utf8PopBack(std::string& text){
+  if(text.empty()) return;
+  size_t i = text.size();
+  while(i > 0){
+    --i;
+    unsigned char byte = static_cast<unsigned char>(text[i]);
+    if((byte & 0xC0) != 0x80){
+      text.erase(i);
+      return;
+    }
+  }
+  text.clear();
+}
+
 static std::string promptNamePlain(){
   if(g_settings.promptName.empty()) return std::string("mycli");
   return g_settings.promptName;
@@ -452,6 +474,28 @@ static int displayWidth(const std::string& text){
     width += w;
   }
   return width;
+}
+
+struct Utf8Glyph {
+  std::string bytes;
+  int width = 1;
+};
+
+static std::vector<Utf8Glyph> utf8Glyphs(const std::string& text){
+  std::vector<Utf8Glyph> glyphs;
+  glyphs.reserve(text.size());
+  size_t i = 0;
+  while(i < text.size()){
+    unsigned char lead = static_cast<unsigned char>(text[i]);
+    size_t len = utf8CharLength(lead);
+    if(i + len > text.size()) len = 1;
+    std::string bytes = text.substr(i, len);
+    int width = displayWidth(bytes);
+    if(width <= 0) width = 1;
+    glyphs.push_back(Utf8Glyph{bytes, width});
+    i += len;
+  }
+  return glyphs;
 }
 
 static std::string renderHighlightedLabel(const std::string& label, const std::vector<int>& positions){
@@ -922,15 +966,23 @@ static void renderPromptLabel(){
       std::cout << ansi::BOLD;
       const int startR = 0, startG = 153, startB = 255;
       const int endR = 128, endG = 0, endB = 255;
-      size_t len = name.size();
-      for(size_t i=0;i<len;++i){
-        double t = (len<=1)? 0.0 : static_cast<double>(i) / static_cast<double>(len-1);
+      auto glyphs = utf8Glyphs(name);
+      size_t glyphCount = glyphs.size();
+      int totalWidth = 0;
+      for(const auto& g : glyphs){ totalWidth += std::max(1, g.width); }
+      int progress = 0;
+      for(size_t idx=0; idx<glyphCount; ++idx){
+        int glyphWidth = std::max(1, glyphs[idx].width);
+        int anchor = progress;
+        if(idx + 1 == glyphCount) anchor = totalWidth > 0 ? totalWidth - 1 : 0;
+        double t = (totalWidth<=1)? 0.0 : static_cast<double>(anchor) / static_cast<double>(totalWidth-1);
         int r = static_cast<int>(startR + (endR - startR) * t + 0.5);
         int g = static_cast<int>(startG + (endG - startG) * t + 0.5);
         int b = static_cast<int>(startB + (endB - startB) * t + 0.5);
         char buf[32];
         std::snprintf(buf, sizeof(buf), "\x1b[38;2;%d;%d;%dm", r, g, b);
-        std::cout << buf << name[i];
+        std::cout << buf << glyphs[idx].bytes;
+        progress += glyphWidth;
       }
       std::cout << ansi::RESET;
     }
@@ -1225,7 +1277,7 @@ int main(){
       continue;
     }
     if(ch==0x7f){
-      if(!buf.empty()){ buf.pop_back(); sel=0; needRender = true; }
+      if(!buf.empty()){ utf8PopBack(buf); sel=0; needRender = true; }
       continue;
     }
     if(ch=='\t'){
@@ -1256,7 +1308,7 @@ int main(){
       }
       continue;
     }
-    if(std::isprint((unsigned char)ch)){
+    if(static_cast<unsigned char>(ch) >= 0x20){
       buf.push_back(ch);
       sel=0;
       needRender = true;
