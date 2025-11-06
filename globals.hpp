@@ -154,6 +154,7 @@ struct AppSettings {
   bool completionSubsequence = false;
   std::string language = "en";
   bool showPathErrorHint = true;
+  std::string messageWatchFolder;
 };
 
 extern AppSettings g_settings;
@@ -172,3 +173,11 @@ std::string trFmt(const std::string& key, const std::map<std::string, std::strin
 std::string localized_tool_summary(const ToolSpec& spec);
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value);
 const std::string& settings_file_path();
+
+// ===== Message watcher =====
+void message_set_watch_folder(const std::string& path);
+const std::string& message_watch_folder();
+void message_poll();
+bool message_has_unread();
+std::vector<std::string> message_peek_unread();
+std::vector<std::string> message_consume_unread();

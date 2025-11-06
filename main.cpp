@@ -10,6 +10,7 @@
 #include <locale>
 #include <stdexcept>
 #include <cctype>
+#include <ctime>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -64,6 +65,99 @@ static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18
   {"path_error_need_dir",    {{"en", "needs directory"}, {"zh", "需要目录"}}},
   {"path_error_need_file",   {{"en", "needs file"}, {"zh", "需要文件"}}}
 };
+
+struct MessageWatcherState {
+  std::string folder;
+  std::set<std::string> known;
+  std::vector<std::string> unread;
+};
+
+static MessageWatcherState g_message_watcher;
+
+static std::string joinPath(const std::string& dir, const std::string& name){
+  if(dir.empty()) return name;
+  if(dir.back()=='/') return dir + name;
+  return dir + "/" + name;
+}
+
+static bool isMarkdownFile(const dirent* entry){
+  if(!entry) return false;
+  if(entry->d_name[0]=='.' && (!entry->d_name[1] || (entry->d_name[1]=='.' && !entry->d_name[2]))) return false;
+  std::string name = entry->d_name;
+  if(name.size()<3) return false;
+  auto pos = name.find_last_of('.');
+  if(pos==std::string::npos) return false;
+  std::string ext = name.substr(pos+1);
+  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+  return ext=="md";
+}
+
+static std::vector<std::pair<std::string, std::time_t>> collectMarkdownFiles(const std::string& folder){
+  std::vector<std::pair<std::string, std::time_t>> files;
+  if(folder.empty()) return files;
+  DIR* d = ::opendir(folder.c_str());
+  if(!d) return files;
+  while(dirent* e = ::readdir(d)){
+    if(!isMarkdownFile(e)) continue;
+    std::string full = joinPath(folder, e->d_name);
+    struct stat st{};
+    if(::stat(full.c_str(), &st)==0 && S_ISREG(st.st_mode)){
+      files.emplace_back(full, st.st_mtime);
+    }
+  }
+  ::closedir(d);
+  std::sort(files.begin(), files.end(), [](const auto& a, const auto& b){
+    if(a.second==b.second) return a.first < b.first;
+    return a.second < b.second;
+  });
+  return files;
+}
+
+void message_set_watch_folder(const std::string& path){
+  g_message_watcher.folder = path;
+  g_message_watcher.unread.clear();
+  g_message_watcher.known.clear();
+  if(path.empty()) return;
+  auto files = collectMarkdownFiles(path);
+  for(const auto& item : files){
+    g_message_watcher.known.insert(item.first);
+  }
+}
+
+const std::string& message_watch_folder(){
+  return g_message_watcher.folder;
+}
+
+void message_poll(){
+  if(g_message_watcher.folder.empty()) return;
+  auto files = collectMarkdownFiles(g_message_watcher.folder);
+  std::set<std::string> current;
+  std::vector<std::pair<std::string, std::time_t>> newly;
+  for(const auto& item : files){
+    current.insert(item.first);
+    if(!g_message_watcher.known.count(item.first)){
+      newly.push_back(item);
+    }
+  }
+  for(const auto& item : newly){
+    g_message_watcher.unread.push_back(item.first);
+  }
+  g_message_watcher.known = std::move(current);
+}
+
+bool message_has_unread(){
+  return !g_message_watcher.unread.empty();
+}
+
+std::vector<std::string> message_peek_unread(){
+  return g_message_watcher.unread;
+}
+
+std::vector<std::string> message_consume_unread(){
+  auto out = g_message_watcher.unread;
+  g_message_watcher.unread.clear();
+  return out;
+}
 
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value){
   spec.summaryLocales[lang] = value;
@@ -206,7 +300,9 @@ static int highlightCursorOffset(const std::string& label, const std::vector<int
 }
 
 static int promptDisplayWidth(){
-  static int width = displayWidth(PLAIN_PROMPT);
+  static int base = displayWidth(PLAIN_PROMPT);
+  int width = base;
+  if(message_has_unread()) width += 1;
   return width;
 }
 
@@ -603,13 +699,19 @@ static std::string contextGhostFor(const std::string& buf){
 }
 
 // ===== Rendering =====
+static void renderPromptLabel(){
+  std::cout << ansi::CYAN << ansi::BOLD;
+  if(message_has_unread()) std::cout << ansi::RED << "★" << ansi::CYAN << ansi::BOLD;
+  std::cout << PLAIN_PROMPT << ansi::RESET;
+}
+
 static void renderInputWithGhost(const std::string& status, int status_len,
                                  const std::string& buf, const std::string& ghost){
   (void)status_len;
   std::cout << ansi::CLR
-            << ansi::WHITE << status << ansi::RESET
-            << ansi::CYAN << ansi::BOLD << PLAIN_PROMPT << ansi::RESET
-            << ansi::WHITE << buf << ansi::RESET;
+            << ansi::WHITE << status << ansi::RESET;
+  renderPromptLabel();
+  std::cout << ansi::WHITE << buf << ansi::RESET;
   if(!ghost.empty()) std::cout << ansi::GRAY << ghost << ansi::RESET;
   std::cout.flush();
 }
@@ -721,6 +823,7 @@ int main(){
   std::setlocale(LC_CTYPE, "");
   load_settings(settings_file_path());
   apply_settings_to_runtime();
+  message_set_watch_folder(g_settings.messageWatchFolder);
 
   // 1) 注册内置工具与状态
   register_all_tools();
@@ -749,6 +852,7 @@ int main(){
   std::string buf; int sel=0; int lastShown=0;
 
   while(true){
+    message_poll();
     std::string status = REG.renderStatusPrefix();
     int status_len = displayWidth(status);
 
@@ -763,9 +867,9 @@ int main(){
     auto pathError = detectPathErrorMessage(buf, cand);
 
     std::cout << ansi::CLR
-              << ansi::WHITE << status << ansi::RESET
-              << ansi::CYAN << ansi::BOLD << PLAIN_PROMPT << ansi::RESET
-              << ansi::WHITE << sw.before << ansi::RESET;
+              << ansi::WHITE << status << ansi::RESET;
+    renderPromptLabel();
+    std::cout << ansi::WHITE << sw.before << ansi::RESET;
     if(pathError){
       std::cout << ansi::RED << sw.word << ansi::RESET
                 << "  " << ansi::YELLOW << "+" << *pathError << ansi::RESET;

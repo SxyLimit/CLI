@@ -123,6 +123,91 @@ inline std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& 
   return out;
 }
 
+inline std::string shellEscape(const std::string& arg){
+  std::string out;
+  out.reserve(arg.size()+2);
+  out.push_back('\'');
+  for(char c : arg){
+    if(c=='\'') out += "'\"'\"'";
+    else out.push_back(c);
+  }
+  out.push_back('\'');
+  return out;
+}
+
+inline ToolSpec make_llm(){
+  ToolSpec t; t.name="llm"; t.summary="Call the Python LLM helper";
+  set_tool_summary_locale(t, "en", "Call the Python LLM helper");
+  set_tool_summary_locale(t, "zh", "调用 Python LLM 助手");
+  SubcommandSpec call{"call", {}, {"<message...>"}, {}, [](const std::vector<std::string>& args){
+    if(args.size()<3){
+      std::cout<<"usage: llm call <message>\n";
+      g_parse_error_cmd = "llm";
+      return;
+    }
+    std::string cmd = "python3 tools/llm.py call";
+    for(size_t i=2;i<args.size();++i){
+      cmd += " ";
+      cmd += shellEscape(args[i]);
+    }
+    int rc = std::system(cmd.c_str());
+    if(rc!=0) g_parse_error_cmd = "llm";
+  }};
+  SubcommandSpec recall{"recall", {}, {}, {}, [](const std::vector<std::string>& args){
+    if(args.size()>2){
+      std::cout<<"usage: llm recall\n";
+      g_parse_error_cmd = "llm";
+      return;
+    }
+    std::string cmd = "python3 tools/llm.py recall";
+    int rc = std::system(cmd.c_str());
+    if(rc!=0) g_parse_error_cmd = "llm";
+  }};
+  t.subs = {call, recall};
+  t.handler = [](const std::vector<std::string>&){
+    std::cout<<"usage: llm <call|recall>\n";
+  };
+  return t;
+}
+
+inline ToolSpec make_message(){
+  ToolSpec t; t.name="message"; t.summary="Show unread markdown notifications";
+  set_tool_summary_locale(t, "en", "Show unread markdown notifications");
+  set_tool_summary_locale(t, "zh", "查看未读的 Markdown 通知");
+  t.handler = [](const std::vector<std::string>&){
+    message_poll();
+    const std::string& folder = message_watch_folder();
+    if(folder.empty()){
+      std::cout<<"message folder not configured. Use `setting set message.folder <path>` first.\n";
+      return;
+    }
+    auto unread = message_consume_unread();
+    if(unread.empty()){
+      std::cout<<"No new markdown files detected in "<<folder<<".\n";
+      return;
+    }
+    for(size_t idx=0; idx<unread.size(); ++idx){
+      const std::string& path = unread[idx];
+      std::cout<<"--- "<<path<<" ---\n";
+      std::ifstream in(path);
+      if(!in.good()){
+        std::cout<<"[message] unable to open file\n";
+        continue;
+      }
+      std::string line;
+      while(std::getline(in, line)){
+        std::cout<<line<<"\n";
+      }
+      if(in.fail() && !in.eof()){
+        std::cout<<"[message] error reading file\n";
+      }
+      std::cout<<std::flush;
+      if(idx + 1 < unread.size()) std::cout<<"\n";
+    }
+  };
+  return t;
+}
+
 // =================== Built-in Tools ===================
 inline ToolSpec make_show(){
   ToolSpec t; t.name="show"; t.summary="Show system information (setting|logs)";
@@ -476,6 +561,8 @@ inline void register_all_tools(){
   REG.registerTool(make_show());
   REG.registerTool(make_setting());
   REG.registerTool(make_run());
+  REG.registerTool(make_llm());
+  REG.registerTool(make_message());
   // git 从配置加载
   REG.registerTool(make_cd());
   REG.registerTool(make_ls());
