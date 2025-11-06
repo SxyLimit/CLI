@@ -20,6 +20,8 @@ namespace ansi {
   inline constexpr const char* RESET = "\x1b[0m";
   inline constexpr const char* WHITE = "\x1b[37m";
   inline constexpr const char* GRAY  = "\x1b[2m";
+  inline constexpr const char* YELLOW= "\x1b[33m";
+  inline constexpr const char* RED   = "\x1b[31m";
   inline constexpr const char* CYAN  = "\x1b[36m";
   inline constexpr const char* BOLD  = "\x1b[1m";
   inline constexpr const char* DIM   = "\x1b[2m";
@@ -54,6 +56,8 @@ inline SplitWord splitLastWord(const std::string& buf){
 }
 
 // ===== Specs & Registry =====
+enum class PathKind { Any, File, Dir };
+
 struct OptionSpec {
   std::string name;
   bool takesValue = false;
@@ -62,6 +66,7 @@ struct OptionSpec {
   bool required = false;
   std::string placeholder;
   bool isPath = false;
+  PathKind pathKind = PathKind::Any;
 };
 
 struct SubcommandSpec {
@@ -115,7 +120,7 @@ extern bool         g_should_exit;
 extern std::string  g_parse_error_cmd;
 
 // ===== Shared decls (inline impl in tools.hpp) =====
-Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word);
+Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind = PathKind::Any);
 std::string renderCommandGhost(const ToolSpec& spec, const std::vector<std::string>& toks);
 std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& sub,
                            const std::vector<std::string>& toks, size_t subIdx,
