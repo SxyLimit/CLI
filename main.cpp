@@ -313,6 +313,7 @@ static Candidates firstWordCandidates(const std::string& buf){
     out.items.push_back(sw.before + s);
     out.labels.push_back(s);
     out.matchPositions.push_back(match.positions);
+    out.annotations.push_back("");
   }
   return out;
 }
@@ -329,6 +330,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       out.items.push_back(sw.before + sub.name);
       out.labels.push_back(sub.name);
       out.matchPositions.push_back(match.positions);
+      out.annotations.push_back("");
     }
     if(!out.items.empty()) return out;
   }
@@ -364,6 +366,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.items.push_back(sw.before + key);
           out.labels.push_back(key);
           out.matchPositions.push_back(match.positions);
+          out.annotations.push_back("");
         }
         if(!out.items.empty()) return out;
       }
@@ -376,6 +379,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.items.push_back(sw.before + val);
           out.labels.push_back(val);
           out.matchPositions.push_back(match.positions);
+          out.annotations.push_back("");
         }
         if(!out.items.empty()) return out;
       }
@@ -400,6 +404,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.items.push_back(sw.before+v);
           out.labels.push_back(v);
           out.matchPositions.push_back(match.positions);
+          out.annotations.push_back("");
         }
         return true;
       } return false;
@@ -439,6 +444,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.items.push_back(sw.before + o.name);
           out.labels.push_back(o.name);
           out.matchPositions.push_back(match.positions);
+          out.annotations.push_back("");
         }
       }
     };
@@ -472,6 +478,7 @@ static Candidates computeCandidates(const std::string& buf){
         out.items.push_back(sw.before + n);
         out.labels.push_back(n);
         out.matchPositions.push_back(match.positions);
+        out.annotations.push_back("");
       }
     }
     return out;
@@ -621,6 +628,13 @@ static void renderBelowThree(const std::string& status, int status_len,
     const std::string& label = cand.labels[idx];
     const std::vector<int>& matches = cand.matchPositions[idx];
     std::string line = renderHighlightedLabel(label, matches);
+    std::string annotation = (idx < cand.annotations.size()) ? cand.annotations[idx] : "";
+    if(!annotation.empty()){
+      line += " ";
+      line += ansi::GREEN;
+      line += annotation;
+      line += ansi::RESET;
+    }
     std::cout << "\n" << "\x1b[2K";
     for(int s=0;s<indent;++s) std::cout << ' ';
     std::cout << line;
@@ -758,7 +772,15 @@ int main(){
     }else if(haveCand){
       const std::string& label = cand.labels[sel];
       const std::vector<int>& matches = cand.matchPositions[sel];
-      std::cout << renderHighlightedLabel(label, matches);
+      std::string rendered = renderHighlightedLabel(label, matches);
+      std::string annotation = (sel < cand.annotations.size()) ? cand.annotations[sel] : "";
+      if(!annotation.empty()){
+        rendered += " ";
+        rendered += ansi::GREEN;
+        rendered += annotation;
+        rendered += ansi::RESET;
+      }
+      std::cout << rendered;
     }else{
       std::cout << ansi::WHITE << sw.word << ansi::RESET;
     }

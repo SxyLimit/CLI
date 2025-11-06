@@ -21,6 +21,7 @@ namespace ansi {
   inline constexpr const char* RESET = "\x1b[0m";
   inline constexpr const char* WHITE = "\x1b[37m";
   inline constexpr const char* GRAY  = "\x1b[2m";
+  inline constexpr const char* GREEN = "\x1b[32m";
   inline constexpr const char* YELLOW= "\x1b[33m";
   inline constexpr const char* RED   = "\x1b[31m";
   inline constexpr const char* CYAN  = "\x1b[36m";
@@ -92,6 +93,7 @@ struct Candidates {
   std::vector<std::string> items;
   std::vector<std::string> labels;
   std::vector<std::vector<int>> matchPositions;
+  std::vector<std::string> annotations;
 };
 
 struct MatchResult {
