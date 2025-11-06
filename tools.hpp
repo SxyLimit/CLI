@@ -136,37 +136,40 @@ inline ToolSpec make_config(){
   set_tool_summary_locale(t, "zh", "管理 CLI 配置");
   t.subs = {
     SubcommandSpec{"get", {}, {"<key>"}, {}, [](const std::vector<std::string>& a){
-      if(a.size()<2){
+      if(a.size()<3){
         std::cout<<tr("config_get_usage")<<"\n";
         g_parse_error_cmd="config";
         return;
       }
       std::string value;
-      if(!config_get_value(a[1], value)){
-        std::cout<<trFmt("config_unknown_key", {{"key", a[1]}})<<"\n";
+      const std::string& key = a[2];
+      if(!config_get_value(key, value)){
+        std::cout<<trFmt("config_unknown_key", {{"key", key}})<<"\n";
         g_parse_error_cmd="config";
         return;
       }
-      std::cout<<trFmt("config_get_value", {{"key", a[1]}, {"value", value}})<<"\n";
+      std::cout<<trFmt("config_get_value", {{"key", key}, {"value", value}})<<"\n";
     }},
     SubcommandSpec{"set", {}, {"<key>","<value>"}, {}, [](const std::vector<std::string>& a){
-      if(a.size()<3){
+      if(a.size()<4){
         std::cout<<tr("config_set_usage")<<"\n";
         g_parse_error_cmd="config";
         return;
       }
       std::string error;
-      if(!config_set_value(a[1], a[2], error)){
+      const std::string& key = a[2];
+      const std::string& value = a[3];
+      if(!config_set_value(key, value, error)){
         if(error=="unknown_key"){
-          std::cout<<trFmt("config_unknown_key", {{"key", a[1]}})<<"\n";
+          std::cout<<trFmt("config_unknown_key", {{"key", key}})<<"\n";
         }else{
-          std::cout<<trFmt("config_invalid_value", {{"key", a[1]}, {"value", a[2]}})<<"\n";
+          std::cout<<trFmt("config_invalid_value", {{"key", key}, {"value", value}})<<"\n";
         }
         g_parse_error_cmd="config";
         return;
       }
       save_config(config_file_path());
-      std::cout<<trFmt("config_set_success", {{"key", a[1]}, {"value", a[2]}})<<"\n";
+      std::cout<<trFmt("config_set_success", {{"key", key}, {"value", value}})<<"\n";
     }},
     SubcommandSpec{"list", {}, {}, {}, [](const std::vector<std::string>&){
       std::cout<<tr("config_list_header")<<"\n";
