@@ -576,7 +576,10 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
 static std::string contextGhostFor(const std::string& buf){
   auto toks=splitTokens(buf); auto sw=splitLastWord(buf);
   if(toks.empty()) return "";
-  if (toks[0] == "help") return " <command>";
+  if (toks[0] == "help"){
+    if(toks.size()==1) return " <command>";
+    return "";
+  }
   const ToolSpec* spec = REG.find(toks[0]); if(!spec) return "";
   if(inSubcommandSlot(*spec, toks)) return " <subcommand>";
   if(!spec->subs.empty() && toks.size()>=2){
