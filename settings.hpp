@@ -3,6 +3,7 @@
 #include "globals.hpp"
 
 #include <sstream>
+#include <optional>
 
 inline AppSettings g_settings{};
 
@@ -34,6 +35,7 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"message.folder", {SettingValueKind::String, {}}},
     {"prompt.name", {SettingValueKind::String, {}}},
     {"prompt.theme", {SettingValueKind::Enum, {"blue", "blue-purple"}}},
+    {"home.path", {SettingValueKind::String, {}}},
   };
   return infos;
 }
@@ -112,49 +114,65 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
 inline void load_settings(const std::string& path){
   AppSettings defaults;
   g_settings = defaults;
+  g_settings.configHome = config_home();
 
   settings_register_language("en");
   settings_register_language("zh");
 
-  std::ifstream in(path);
-  if(!in.good()) return;
+  std::optional<std::string> desiredHome;
 
-  std::string line;
-  while(std::getline(in, line)){
-    if(line.empty() || line[0]=='#' || line[0]==';') continue;
-    auto eq = line.find('=');
-    if(eq==std::string::npos) continue;
-    std::string key = line.substr(0, eq);
-    std::string val = line.substr(eq+1);
-    auto trim = [](std::string s){
-      size_t a=0,b=s.size();
-      while(a<b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
-      while(b>a && std::isspace(static_cast<unsigned char>(s[b-1]))) --b;
-      return s.substr(a, b-a);
-    };
-    key = trim(key);
-    val = trim(val);
-    if(key=="prompt.cwd"){
-      CwdMode mode;
-      if(parseCwdMode(val, mode)) g_settings.cwdMode = mode;
-    }else if(key=="completion.ignore_case"){
-      bool b; if(parseBool(val,b)) g_settings.completionIgnoreCase = b;
-    }else if(key=="completion.subsequence"){
-      bool b; if(parseBool(val,b)) g_settings.completionSubsequence = b;
-    }else if(key=="language"){
-      if(!val.empty()){ g_settings.language = val; settings_register_language(val); }
-    }else if(key=="ui.path_error_hint"){
-      bool b; if(parseBool(val,b)) g_settings.showPathErrorHint = b;
-    }else if(key=="message.folder"){
-      g_settings.messageWatchFolder = val;
-    }else if(key=="prompt.name"){
-      g_settings.promptName = val.empty()? "mycli" : val;
-    }else if(key=="prompt.theme"){
-      std::string t = val;
-      std::transform(t.begin(), t.end(), t.begin(), ::tolower);
-      if(t=="blue" || t=="blue-purple"){
-        g_settings.promptTheme = t;
+  {
+    std::ifstream in(path);
+    if(!in.good()) return;
+
+    std::string line;
+    while(std::getline(in, line)){
+      if(line.empty() || line[0]=='#' || line[0]==';') continue;
+      auto eq = line.find('=');
+      if(eq==std::string::npos) continue;
+      std::string key = line.substr(0, eq);
+      std::string val = line.substr(eq+1);
+      auto trim = [](std::string s){
+        size_t a=0,b=s.size();
+        while(a<b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+        while(b>a && std::isspace(static_cast<unsigned char>(s[b-1]))) --b;
+        return s.substr(a, b-a);
+      };
+      key = trim(key);
+      val = trim(val);
+      if(key=="prompt.cwd"){
+        CwdMode mode;
+        if(parseCwdMode(val, mode)) g_settings.cwdMode = mode;
+      }else if(key=="completion.ignore_case"){
+        bool b; if(parseBool(val,b)) g_settings.completionIgnoreCase = b;
+      }else if(key=="completion.subsequence"){
+        bool b; if(parseBool(val,b)) g_settings.completionSubsequence = b;
+      }else if(key=="language"){
+        if(!val.empty()){ g_settings.language = val; settings_register_language(val); }
+      }else if(key=="ui.path_error_hint"){
+        bool b; if(parseBool(val,b)) g_settings.showPathErrorHint = b;
+      }else if(key=="message.folder"){
+        g_settings.messageWatchFolder = val;
+      }else if(key=="prompt.name"){
+        g_settings.promptName = val.empty()? "mycli" : val;
+      }else if(key=="prompt.theme"){
+        std::string t = val;
+        std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+        if(t=="blue" || t=="blue-purple"){
+          g_settings.promptTheme = t;
+        }
+      }else if(key=="home.path"){
+        desiredHome = val;
       }
+    }
+  }
+
+  if(desiredHome && *desiredHome != g_settings.configHome){
+    std::string err;
+    if(set_config_home(*desiredHome, err)){
+      g_settings.configHome = config_home();
+      load_settings(settings_file_path());
+      return;
     }
   }
 }
@@ -162,6 +180,7 @@ inline void load_settings(const std::string& path){
 inline void save_settings(const std::string& path){
   std::ofstream out(path);
   if(!out.good()) return;
+  out << "home.path=" << config_home() << "\n";
   out << "prompt.cwd=" << cwdModeToString(g_settings.cwdMode) << "\n";
   out << "completion.ignore_case=" << (g_settings.completionIgnoreCase? "true" : "false") << "\n";
   out << "completion.subsequence=" << (g_settings.completionSubsequence? "true" : "false") << "\n";
@@ -200,6 +219,9 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="prompt.theme"){
     value = g_settings.promptTheme; return true;
+  }
+  if(key=="home.path"){
+    value = g_settings.configHome; return true;
   }
   return false;
 }
@@ -268,6 +290,18 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
       return false;
     }
     g_settings.promptTheme = t;
+    return true;
+  }
+  if(key=="home.path"){
+    if(value.empty()){
+      error = "invalid_value";
+      return false;
+    }
+    if(!set_config_home(value, error)){
+      if(error.empty()) error = "invalid_value";
+      return false;
+    }
+    g_settings.configHome = config_home();
     return true;
   }
   error = "unknown_key";
