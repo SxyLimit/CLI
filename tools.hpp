@@ -22,8 +22,17 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
       isDir = S_ISDIR(st.st_mode);
       isFile = S_ISREG(st.st_mode);
     }
-    bool accept = (kind==PathKind::Any) || (kind==PathKind::Dir && isDir) || (kind==PathKind::File && isFile);
-    if(!accept) continue;
+    bool include = false;
+    bool dirAsHint = false;
+    if(kind == PathKind::Any){
+      include = isDir || isFile;
+    }else if(kind == PathKind::Dir){
+      include = isDir;
+    }else if(kind == PathKind::File){
+      if(isFile) include = true;
+      else if(isDir){ include = true; dirAsHint = true; }
+    }
+    if(!include) continue;
     if(isDir) cand += "/";
     std::vector<int> positions;
     for(size_t i=0;i<dir.size();++i) positions.push_back(static_cast<int>(i));
@@ -33,15 +42,17 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
     out.labels.push_back(cand);
     std::sort(positions.begin(), positions.end());
     out.matchPositions.push_back(std::move(positions));
+    out.annotations.push_back(dirAsHint? "[dir]" : "");
   }
   ::closedir(d);
   std::vector<size_t> idx(out.labels.size()); for(size_t i=0;i<idx.size();++i) idx[i]=i;
   std::sort(idx.begin(),idx.end(),[&](size_t a,size_t b){ return out.labels[a] < out.labels[b]; });
-  Candidates s; s.items.reserve(idx.size()); s.labels.reserve(idx.size());
+  Candidates s; s.items.reserve(idx.size()); s.labels.reserve(idx.size()); s.annotations.reserve(idx.size());
   for(size_t k: idx){
     s.items.push_back(out.items[k]);
     s.labels.push_back(out.labels[k]);
     s.matchPositions.push_back(out.matchPositions[k]);
+    s.annotations.push_back(out.annotations[k]);
   }
   return s;
 }
