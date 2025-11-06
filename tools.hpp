@@ -1,5 +1,7 @@
 #pragma once
 #include "globals.hpp"
+#include <system_error>
+#include <thread>
 
 // ===== Path candidates (inline) =====
 inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind){
@@ -150,10 +152,14 @@ inline ToolSpec make_llm(){
       cmd += " ";
       cmd += shellEscape(args[i]);
     }
-    int rc = std::system(cmd.c_str());
-    llm_poll();
-    if(rc!=0) g_parse_error_cmd = "llm";
-    else llm_mark_seen();
+    cmd = "MYCLI_LLM_SILENT=1 " + cmd + " > /dev/null 2>&1";
+    try{
+      std::thread([cmd]{ std::system(cmd.c_str()); }).detach();
+      std::cout << "[llm] request dispatched asynchronously. Use `llm recall` to view replies." << "\n";
+    }catch(const std::system_error&){
+      int rc = std::system(cmd.c_str());
+      if(rc!=0) g_parse_error_cmd = "llm";
+    }
   }};
   SubcommandSpec recall{"recall", {}, {}, {}, [](const std::vector<std::string>& args){
     if(args.size()>2){
@@ -164,8 +170,11 @@ inline ToolSpec make_llm(){
     std::string cmd = "python3 tools/llm.py recall";
     int rc = std::system(cmd.c_str());
     llm_poll();
-    if(rc!=0) g_parse_error_cmd = "llm";
-    else llm_mark_seen();
+    if(rc!=0){
+      g_parse_error_cmd = "llm";
+    }else{
+      llm_mark_seen();
+    }
   }};
   t.subs = {call, recall};
   t.handler = [](const std::vector<std::string>&){

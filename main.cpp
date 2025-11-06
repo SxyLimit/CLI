@@ -1,5 +1,7 @@
 #include <termios.h>
 #include <unistd.h>
+#include <poll.h>
+#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -1086,22 +1088,33 @@ int main(){
     ~TermRaw(){ disable(); }
   } term; term.enable();
 
-  std::string buf; int sel=0; int lastShown=0;
+  std::string buf;
+  int sel = 0;
+  int lastShown = 0;
 
-  while(true){
-    message_poll();
-    llm_poll();
+  message_poll();
+  llm_poll();
+  bool lastMessageUnread = message_has_unread();
+  bool lastLlmUnread = llm_has_unread();
+
+  Candidates cand;
+  SplitWord sw;
+  int total = 0;
+  bool haveCand = false;
+  std::string contextGhost;
+
+  bool needRender = true;
+
+  auto renderFrame = [&](){
     std::string status = REG.renderStatusPrefix();
     int status_len = displayWidth(status);
 
-    Candidates cand = computeCandidates(buf);
-    auto sw = splitLastWord(buf);
-    int total = (int)cand.labels.size();
-    bool haveCand = total>0;
-
-    if(haveCand && sel>=total) sel=0;
-    std::string contextGhost = haveCand? "" : contextGhostFor(buf);
-
+    cand = computeCandidates(buf);
+    sw = splitLastWord(buf);
+    total = static_cast<int>(cand.labels.size());
+    haveCand = total > 0;
+    if(haveCand && sel >= total) sel = 0;
+    contextGhost = haveCand ? std::string() : contextGhostFor(buf);
     auto pathError = detectPathErrorMessage(buf, cand);
 
     std::cout << ansi::CLR
@@ -1153,7 +1166,42 @@ int main(){
       lastShown=0; sel=0;
     }
 
-    char ch; if(read(STDIN_FILENO,&ch,1)<=0) break;
+    needRender = false;
+    lastMessageUnread = message_has_unread();
+    lastLlmUnread = llm_has_unread();
+  };
+
+  while(true){
+    if(needRender){
+      renderFrame();
+    }
+
+    struct pollfd pfd{STDIN_FILENO, POLLIN, 0};
+    int rc = ::poll(&pfd, 1, 200);
+    if(rc == 0){
+      bool beforeMsg = lastMessageUnread;
+      bool beforeLlm = lastLlmUnread;
+      message_poll();
+      llm_poll();
+      bool afterMsg = message_has_unread();
+      bool afterLlm = llm_has_unread();
+      if(afterMsg != beforeMsg || afterLlm != beforeLlm){
+        lastMessageUnread = afterMsg;
+        lastLlmUnread = afterLlm;
+        needRender = true;
+      }
+      continue;
+    }
+    if(rc < 0){
+      if(errno == EINTR) continue;
+      break;
+    }
+    if(!(pfd.revents & POLLIN)){
+      continue;
+    }
+    char ch;
+    ssize_t n = ::read(STDIN_FILENO, &ch, 1);
+    if(n <= 0) break;
 
     if(ch=='\n' || ch=='\r'){
       std::cout << "\n";
@@ -1168,19 +1216,52 @@ int main(){
           if(g_should_exit){ std::cout<<ansi::DIM<<"bye"<<ansi::RESET<<"\n"; break; }
         }
       }
+      message_poll();
+      llm_poll();
+      lastMessageUnread = message_has_unread();
+      lastLlmUnread = llm_has_unread();
       buf.clear(); sel=0; lastShown=0;
+      needRender = true;
       continue;
     }
-    if(ch==0x7f){ if(!buf.empty()) buf.pop_back(); sel=0; continue; }
-    if(ch=='\t'){ if(haveCand){ auto head=splitLastWord(buf).before; buf=head+cand.labels[sel]; sel=0; } continue; }
-    if(ch=='\x1b'){ char seq[2]; if(read(STDIN_FILENO,&seq[0],1)<=0) continue; if(read(STDIN_FILENO,&seq[1],1)<=0) continue;
-      if(seq[0]=='['){
-        if(seq[1]=='A'){ if(haveCand){ sel=(sel-1+total)%total; } }
-        else if(seq[1]=='B'){ if(haveCand){ sel=(sel+1)%total; } }
+    if(ch==0x7f){
+      if(!buf.empty()){ buf.pop_back(); sel=0; needRender = true; }
+      continue;
+    }
+    if(ch=='\t'){
+      if(haveCand && total>0){
+        auto head=splitLastWord(buf).before;
+        buf=head+cand.labels[sel];
+        sel=0;
+        needRender = true;
       }
       continue;
     }
-    if(std::isprint((unsigned char)ch)){ buf.push_back(ch); sel=0; continue; }
+    if(ch=='\x1b'){
+      char seq[2];
+      if(::read(STDIN_FILENO,&seq[0],1)<=0) continue;
+      if(::read(STDIN_FILENO,&seq[1],1)<=0) continue;
+      if(seq[0]=='['){
+        if(seq[1]=='A'){
+          if(haveCand && total>0){
+            sel=(sel-1+total)%total;
+            needRender = true;
+          }
+        }else if(seq[1]=='B'){
+          if(haveCand && total>0){
+            sel=(sel+1)%total;
+            needRender = true;
+          }
+        }
+      }
+      continue;
+    }
+    if(std::isprint((unsigned char)ch)){
+      buf.push_back(ch);
+      sel=0;
+      needRender = true;
+      continue;
+    }
   }
 
   ::write(STDOUT_FILENO, "\r\n", 2); ::fsync(STDOUT_FILENO);

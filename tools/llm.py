@@ -7,7 +7,37 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 HISTORY_PATH = Path(os.path.expanduser("~/.mycli_llm_history.json"))
-DEFAULT_MODEL = os.getenv("MYCLI_LLM_MODEL", "gpt-4o-mini")
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+DEFAULT_SYSTEM_PROMPT = (
+    "你是 Kimi，由 Moonshot AI 提供的人工智能助手，你更擅长中文和英文的对话。"
+    "你会为用户提供安全，有帮助，准确的回答。同时，你会拒绝一切涉及恐怖主义，"
+    "种族歧视，黄色暴力等问题的回答。Moonshot AI 为专有名词，不可翻译成其他语言。"
+)
+
+
+def load_env_file() -> None:
+    if not ENV_PATH.exists():
+        return
+    try:
+        with ENV_PATH.open("r", encoding="utf-8") as fp:
+            for line in fp:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if "=" not in stripped:
+                    continue
+                key, value = stripped.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception:
+        # Silently ignore .env parsing errors; runtime env vars still apply.
+        return
+
+
+load_env_file()
 
 
 def load_history() -> List[Dict[str, Any]]:
@@ -27,7 +57,16 @@ def save_history(items: List[Dict[str, Any]]) -> None:
 
 
 def call_openai(prompt: str) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("LLM_API_KEY", "").strip() or os.getenv("MOONSHOT_API_KEY", "").strip()
+    base_url = os.getenv("LLM_BASE_URL", "https://api.moonshot.cn/v1")
+    model = os.getenv("LLM_MODEL", "kimi-k2-turbo-preview")
+    system_prompt = os.getenv("LLM_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+    temperature_raw = os.getenv("LLM_TEMPERATURE", "0.6")
+    try:
+        temperature = float(temperature_raw)
+    except ValueError:
+        temperature = 0.6
+
     try:
         from openai import OpenAI  # type: ignore
     except Exception:
@@ -37,22 +76,22 @@ def call_openai(prompt: str) -> str:
         return f"[stub] echo: {prompt}"
 
     try:
-        client = OpenAI()
-        response = client.responses.create(
-            model=DEFAULT_MODEL,
-            input=prompt,
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=temperature,
         )
-        if response.output:
-            parts = []
-            for item in response.output:
-                if not hasattr(item, "content"):
-                    continue
-                for chunk in getattr(item, "content", []) or []:
-                    text = getattr(chunk, "text", None)
-                    if text:
-                        parts.append(text)
-            if parts:
-                return "".join(parts)
+        choices = getattr(completion, "choices", None)
+        if choices:
+            first = choices[0]
+            message = getattr(first, "message", None)
+            content = getattr(message, "content", None) if message else None
+            if content:
+                return content
         return "(no content returned)"
     except Exception as exc:
         return f"[error] {exc}"
@@ -72,7 +111,8 @@ def handle_call(args: List[str]) -> int:
     history = load_history()
     history.append(entry)
     save_history(history)
-    print(reply)
+    if os.getenv("MYCLI_LLM_SILENT", "0") != "1":
+        print(reply)
     return 0
 
 

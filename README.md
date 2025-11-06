@@ -20,7 +20,7 @@ g++ -std=c++17 main.cpp -o mycli
 - **外部工具配置**：支持在 `mycli_tools.conf` 中用 INI 语法新增命令及子命令，含互斥选项、动态执行等。
 - **消息提醒**：可监听指定目录（默认当前目录下的 `message/`）中的 `.md` 文件，新建或修改后提示符前会显示红色 `[M]`，通过 `message list/last/detail` 查看。
 - **可定制提示符**：通过设置 `prompt.name` 与 `prompt.theme` 自定义提示符名称及颜色（支持蓝色与蓝紫渐变）。
-- **LLM 接口**：提供 `llm` 命令，调用 `tools/llm.py` 通过 OpenAI 接口（或本地回显模式）完成调用与历史查看。
+- **LLM 接口**：提供 `llm` 命令，调用 `tools/llm.py` 通过 Moonshot(Kimi) 接口（或本地回显模式）完成调用与历史查看。
 
 ## 消息提醒与查看
 
@@ -39,10 +39,20 @@ g++ -std=c++17 main.cpp -o mycli
 
 `llm` 命令由 `tools/llm.py` 实现，提供与大模型的简单交互：
 
-- `llm call <消息>`：发送文本到模型并打印回复，同时将问答历史保存到 `~/.mycli_llm_history.json`。
-- `llm recall`：查看最近一次调用的提示词与回复。
+- `llm call <消息>`：异步发送文本到模型并立即返回，问答历史写入 `~/.mycli_llm_history.json`，等待模型返回后提示符前会出现红色 `[L]` 提醒。
+- `llm recall`：查看最近一次调用的提示词与回复，同时清除 `[L]` 提醒。
 
-默认使用 `gpt-4o-mini` 模型，可通过环境变量 `MYCLI_LLM_MODEL` 自定义；使用 OpenAI 接口时需配置 `OPENAI_API_KEY`。若未设置密钥或缺少依赖，则脚本会退化为本地回显模式，方便调试。
+默认使用 Moonshot 的 `kimi-k2-turbo-preview` 模型，并支持通过 `.env` 或环境变量覆盖以下配置：
+
+| 变量名 | 说明 |
+| --- | --- |
+| `LLM_API_KEY` | 需要自行填写的 Moonshot API Key（默认为空）。|
+| `LLM_BASE_URL` | API 地址，默认 `https://api.moonshot.cn/v1`。|
+| `LLM_MODEL` | 模型名称，默认 `kimi-k2-turbo-preview`。|
+| `LLM_SYSTEM_PROMPT` | 系统提示词，默认值与官方示例一致。|
+| `LLM_TEMPERATURE` | 温度参数，默认 `0.6`。|
+
+运行 `llm call` 时 CLI 会在后台调用 Python 脚本，若未设置密钥或缺少依赖，则脚本会退化为本地回显模式，方便调试。
 
 当检测到新的历史记录时，提示符前会出现红色 `[L]` 提醒，可通过执行 `llm recall` 清除。
 
