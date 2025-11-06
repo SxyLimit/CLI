@@ -1,5 +1,6 @@
 #pragma once
 #include "globals.hpp"
+#include "tools/todo.hpp"
 
 // ===== Path candidates (inline) =====
 inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind){
@@ -169,6 +170,14 @@ inline ToolSpec make_setting(){
         return;
       }
       save_settings(settings_file_path());
+      if(key=="todo.storage_dir"){
+        std::string err;
+        if(!ToDoManager::instance().setupStorage(g_settings.todoStorageDir, err)){
+          std::cout<<ansi::RED<<err<<ansi::RESET<<"\n";
+          g_parse_error_cmd="setting";
+          return;
+        }
+      }
       std::cout<<trFmt("setting_set_success", {{"key", key}, {"value", value}})<<"\n";
     }},
     SubcommandSpec{"list", {}, {}, {}, [](const std::vector<std::string>&){
@@ -462,6 +471,7 @@ inline void register_tools_from_config(const std::string& path){
 
 // =================== Register All ===================
 inline void register_all_tools(){
+  ToDoManager::instance().initialize();
   REG.registerTool(make_show());
   REG.registerTool(make_setting());
   REG.registerTool(make_run());
@@ -471,7 +481,10 @@ inline void register_all_tools(){
   REG.registerTool(make_cat());
   REG.registerTool(make_exit_tool("exit"));
   REG.registerTool(make_exit_tool("quit"));
+  REG.registerTool(make_todo_tool());
+  ToDoManager::instance().remindUrgent();
 }
 inline void register_status_providers(){
   REG.registerStatusProvider(make_cwd_status());
+  REG.registerStatusProvider(StatusProvider{"todo_urgent", [](){ return ToDoManager::instance().urgentStatus(); }});
 }

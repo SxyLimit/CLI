@@ -152,6 +152,7 @@ struct AppSettings {
   bool completionSubsequence = false;
   std::string language = "en";
   bool showPathErrorHint = true;
+  std::string todoStorageDir;
 };
 
 extern AppSettings g_settings;

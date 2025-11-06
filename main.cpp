@@ -318,6 +318,9 @@ static Candidates firstWordCandidates(const std::string& buf){
 }
 
 static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf){
+  if(spec.name=="ToDoListEditor"){
+    return todoCandidates(spec, buf);
+  }
   Candidates out; auto sw=splitLastWord(buf); auto toks=splitTokens(buf);
   if(toks.empty() || toks[0]!=spec.name) return out;
 
@@ -369,6 +372,9 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       }
       if(sub->name=="set" && idx==1){
         std::string keyName = (toks.size()>=3? toks[2] : "");
+        if(auto pk = settings_value_path_kind(keyName)){
+          return pathCandidatesForWord(buf, sw.word, *pk);
+        }
         auto values = settings_value_suggestions_for(keyName);
         for(const auto& val : values){
           MatchResult match = compute_match(val, sw.word);
@@ -456,6 +462,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
 }
 
 static Candidates computeCandidates(const std::string& buf){
+  if(todoWizardActive()) return todoWizardCandidates(buf);
   auto toks=splitTokens(buf);
   auto sw  = splitLastWord(buf);
 
@@ -483,6 +490,7 @@ static Candidates computeCandidates(const std::string& buf){
 }
 
 static std::optional<std::string> detectPathErrorMessage(const std::string& buf, const Candidates& cand){
+  if(todoWizardActive()) return std::nullopt;
   auto toks = splitTokens(buf);
   auto sw   = splitLastWord(buf);
   if(toks.empty() || sw.word.empty()) return std::nullopt;
@@ -574,6 +582,7 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
 }
 
 static std::string contextGhostFor(const std::string& buf){
+  if(todoWizardActive()) return todoWizardGhost();
   auto toks=splitTokens(buf); auto sw=splitLastWord(buf);
   if(toks.empty()) return "";
   if (toks[0] == "help"){
@@ -581,6 +590,9 @@ static std::string contextGhostFor(const std::string& buf){
     return "";
   }
   const ToolSpec* spec = REG.find(toks[0]); if(!spec) return "";
+  if(spec->name=="ToDoListEditor"){
+    return todoContextGhost(*spec, toks);
+  }
   if(inSubcommandSlot(*spec, toks)) return " <subcommand>";
   if(!spec->subs.empty() && toks.size()>=2){
     for(auto &sub: spec->subs){
@@ -615,7 +627,9 @@ static void renderBelowThree(const std::string& status, int status_len,
   int total=(int)cand.labels.size();
   int toShow = std::min(3, std::max(0, total-1));
   auto sw = splitLastWord(buf);
-  int indent = status_len + promptDisplayWidth() + displayWidth(sw.before);
+  std::string prefix = todoWizardActive()? todoWizardPrefix() : std::string();
+  int prefixWidth = displayWidth(prefix);
+  int indent = status_len + promptDisplayWidth() + prefixWidth + displayWidth(sw.before);
   for(int i=1;i<=toShow;++i){
     size_t idx = (sel+i)%total;
     const std::string& label = cand.labels[idx];
@@ -738,6 +752,10 @@ int main(){
     std::string status = REG.renderStatusPrefix();
     int status_len = displayWidth(status);
 
+    if(todoWizardActive() && buf.empty()){
+      if(auto prefill = todoWizardPrefill()) buf = *prefill;
+    }
+
     Candidates cand = computeCandidates(buf);
     auto sw = splitLastWord(buf);
     int total = (int)cand.labels.size();
@@ -748,10 +766,15 @@ int main(){
 
     auto pathError = detectPathErrorMessage(buf, cand);
 
+    std::string wizardPrefix = todoWizardActive()? todoWizardPrefix() : std::string();
+    int prefixWidth = displayWidth(wizardPrefix);
+
     std::cout << ansi::CLR
               << ansi::WHITE << status << ansi::RESET
               << ansi::CYAN << ansi::BOLD << PLAIN_PROMPT << ansi::RESET
-              << ansi::WHITE << sw.before << ansi::RESET;
+              << ansi::WHITE;
+    if(!wizardPrefix.empty()) std::cout << wizardPrefix;
+    std::cout << sw.before << ansi::RESET;
     if(pathError){
       std::cout << ansi::RED << sw.word << ansi::RESET
                 << "  " << ansi::YELLOW << "+" << *pathError << ansi::RESET;
@@ -765,7 +788,7 @@ int main(){
     if(!contextGhost.empty()) std::cout << ansi::GRAY << contextGhost << ansi::RESET;
     std::cout.flush();
 
-    int baseIndent = status_len + promptDisplayWidth() + displayWidth(sw.before);
+    int baseIndent = status_len + promptDisplayWidth() + prefixWidth + displayWidth(sw.before);
     int cursorCol = baseIndent;
     if(pathError){
       cursorCol += displayWidth(sw.word);
@@ -789,6 +812,14 @@ int main(){
 
     if(ch=='\n' || ch=='\r'){
       std::cout << "\n";
+      if(todoWizardActive()){
+        if(todoWizardSubmit(buf)){
+          buf.clear(); sel=0; lastShown=0;
+        }else{
+          sel=0;
+        }
+        continue;
+      }
       if(!buf.empty()){
         auto tks = splitTokens(buf);
         if(tks[0]=="help"){
@@ -804,7 +835,7 @@ int main(){
       continue;
     }
     if(ch==0x7f){ if(!buf.empty()) buf.pop_back(); sel=0; continue; }
-    if(ch=='\t'){ if(haveCand){ auto head=splitLastWord(buf).before; buf=head+cand.labels[sel]; sel=0; } continue; }
+    if(ch=='\t'){ if(haveCand){ buf = cand.items[sel]; sel=0; } continue; }
     if(ch=='\x1b'){ char seq[2]; if(read(STDIN_FILENO,&seq[0],1)<=0) continue; if(read(STDIN_FILENO,&seq[1],1)<=0) continue;
       if(seq[0]=='['){
         if(seq[1]=='A'){ if(haveCand){ sel=(sel-1+total)%total; } }
