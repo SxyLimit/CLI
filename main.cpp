@@ -4,10 +4,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <string>
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <optional>
 
 #include "globals.hpp"
 #include "tools.hpp"
@@ -28,6 +30,77 @@ static bool isPathLikePlaceholder(const std::string& ph){
   std::string t = ph; std::transform(t.begin(), t.end(), t.begin(), ::tolower);
   // 支持 <path> / <file> / <dir> 及其变体 [<path>]、<path...> 等
   return t.find("<path")!=std::string::npos || t.find("<file")!=std::string::npos || t.find("<dir")!=std::string::npos;
+}
+
+static PathKind placeholderPathKind(const std::string& ph){
+  std::string t = ph; std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+  if(t.find("<file") != std::string::npos) return PathKind::File;
+  if(t.find("<dir")  != std::string::npos) return PathKind::Dir;
+  return PathKind::Any;
+}
+
+struct PathCompletionContext {
+  bool active = false;
+  bool appliesToCurrentWord = false;
+  PathKind kind = PathKind::Any;
+};
+
+static PathCompletionContext analyzePositionalPathContext(const std::vector<std::string>& posDefs,
+                                                         size_t startIdx,
+                                                         const std::vector<OptionSpec>& opts,
+                                                         const std::vector<std::string>& toks,
+                                                         const SplitWord& sw,
+                                                         const std::string& buf){
+  PathCompletionContext ctx;
+  if(posDefs.empty()) return ctx;
+
+  bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
+  if(!trailingSpace && startIdx >= toks.size()) return ctx;
+
+  size_t i = startIdx;
+  size_t posFilled = 0;
+  bool currentWordIsPositional = false;
+
+  while(i < toks.size()){
+    const std::string& tk = toks[i];
+    if(!tk.empty() && tk[0]=='-'){
+      bool takes=false;
+      size_t advance = 1;
+      for(auto &o : opts){
+        if(o.name == tk){
+          takes = o.takesValue;
+          if(takes && i + 1 < toks.size()){
+            bool valueIsCurrent = (!trailingSpace && i + 1 == toks.size() - 1 && toks.back() == sw.word);
+            if(valueIsCurrent){
+              currentWordIsPositional = false;
+            }
+            advance = 2;
+          }
+          break;
+        }
+      }
+      i += advance;
+      continue;
+    }
+
+    bool isCurrentWord = (!trailingSpace && i == toks.size() - 1 && toks[i] == sw.word);
+    if(isCurrentWord){
+      currentWordIsPositional = true;
+      break;
+    }
+    posFilled += 1;
+    i += 1;
+  }
+
+  if(!(trailingSpace || currentWordIsPositional)) return ctx;
+
+  if(posFilled < posDefs.size() && isPathLikePlaceholder(posDefs[posFilled])){
+    ctx.active = true;
+    ctx.appliesToCurrentWord = currentWordIsPositional;
+    PathKind kind = placeholderPathKind(posDefs[posFilled]);
+    ctx.kind = kind;
+  }
+  return ctx;
 }
 
 static bool inSubcommandSlot(const ToolSpec& spec, const std::vector<std::string>& toks){
@@ -85,7 +158,11 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
     std::string prev = (toks.back()==sw.word && toks.size()>=2) ? toks[toks.size()-2] : (!toks.empty()? toks.back():"");
     auto tryValue = [&](const OptionSpec& o)->bool{
       if(o.name==prev && o.takesValue){
-        if(o.isPath) { out = pathCandidatesForWord(buf, sw.word); return true; }
+        if(o.isPath) {
+          PathKind kind = (o.pathKind != PathKind::Any) ? o.pathKind : placeholderPathKind(o.placeholder);
+          out = pathCandidatesForWord(buf, sw.word, kind);
+          return true;
+        }
         std::vector<std::string> vals = o.valueSuggestions;
         if(o.dynamicValues){ auto more=o.dynamicValues(toks); vals.insert(vals.end(), more.begin(), more.end()); }
         for(auto &v: vals) if(startsWith(v, sw.word)){ out.items.push_back(sw.before+v); out.labels.push_back(v); }
@@ -97,30 +174,21 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
   }
 
   // 如果“下一个位置参数占位符”为路径型 → 直接进入路径补全（无需 ./ 或 /）
-  auto nextPathPosTrigger = [&](const std::vector<std::string>& posDefs, size_t startIdx, const std::vector<OptionSpec>& opts)->bool{
-    // 计算下一个待填的位置参数索引
-    size_t i = startIdx, posFilled = 0;
-    while(i < toks.size()){
-      const std::string& tk = toks[i];
-      if(!tk.empty() && tk[0]=='-'){
-        bool takes=false; for(auto &o: opts) if(o.name==tk){ takes=o.takesValue; break; }
-        i += takes && (i+1<toks.size()) ? 2 : 1;
-      } else { posFilled += 1; i += 1; }
-    }
-    if(posFilled < posDefs.size() && isPathLikePlaceholder(posDefs[posFilled])){
-      // 处于输入该位置参数阶段时，触发路径补全（即使 sw.word 为空或不以 ./ 开头）
-      return true;
-    }
-    return false;
+  auto positionalContext = [&](const std::vector<std::string>& posDefs, size_t startIdx, const std::vector<OptionSpec>& opts){
+    return analyzePositionalPathContext(posDefs, startIdx, opts, toks, sw, buf);
   };
 
   if(sub){
-    if(nextPathPosTrigger(sub->positional, /*startIdx*/2, sub->options)){
-      return pathCandidatesForWord(buf, sw.word);
+    std::vector<OptionSpec> combinedOpts = spec.options;
+    combinedOpts.insert(combinedOpts.end(), sub->options.begin(), sub->options.end());
+    auto ctx = positionalContext(sub->positional, /*startIdx*/2, combinedOpts);
+    if(ctx.active){
+      return pathCandidatesForWord(buf, sw.word, ctx.kind);
     }
   }else{
-    if(nextPathPosTrigger(spec.positional, /*startIdx*/1, spec.options)){
-      return pathCandidatesForWord(buf, sw.word);
+    auto ctx = positionalContext(spec.positional, /*startIdx*/1, spec.options);
+    if(ctx.active){
+      return pathCandidatesForWord(buf, sw.word, ctx.kind);
     }
   }
 
@@ -143,7 +211,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
 
   // 路径模式（兜底）
   if(startsWith(sw.word,"/")||startsWith(sw.word,"./")||startsWith(sw.word,"../")){
-    return pathCandidatesForWord(buf, sw.word);
+    return pathCandidatesForWord(buf, sw.word, PathKind::Any);
   }
 
   return out;
@@ -171,6 +239,76 @@ static Candidates computeCandidates(const std::string& buf){
   if(toks.empty()) return firstWordCandidates(buf);
   if(const ToolSpec* spec = REG.find(toks[0])) return candidatesForTool(*spec, buf);
   return firstWordCandidates(buf);
+}
+
+static std::optional<std::string> detectPathErrorMessage(const std::string& buf, const Candidates& cand){
+  auto toks = splitTokens(buf);
+  auto sw   = splitLastWord(buf);
+  if(toks.empty() || sw.word.empty()) return std::nullopt;
+  if(!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back()))) return std::nullopt;
+
+  if(toks[0] == "help") return std::nullopt;
+  const ToolSpec* spec = REG.find(toks[0]);
+  if(!spec) return std::nullopt;
+
+  const SubcommandSpec* sub = nullptr;
+  if(!spec->subs.empty() && toks.size()>=2){
+    for(auto &s : spec->subs){
+      if(s.name == toks[1]){ sub = &s; break; }
+    }
+  }
+
+  PathKind expected = PathKind::Any;
+  bool hasExpectation = false;
+
+  auto findPathOpt = [&](const std::vector<OptionSpec>& opts)->const OptionSpec*{
+    if(toks.size()<2 || toks.back()!=sw.word) return nullptr;
+    std::string prev = toks[toks.size()-2];
+    for(auto &o : opts){
+      if(o.name==prev && o.takesValue && o.isPath) return &o;
+    }
+    return nullptr;
+  };
+
+  const OptionSpec* opt = nullptr;
+  if(sub){ opt = findPathOpt(sub->options); }
+  if(!opt) opt = findPathOpt(spec->options);
+  if(opt){
+    expected = (opt->pathKind != PathKind::Any) ? opt->pathKind : placeholderPathKind(opt->placeholder);
+    hasExpectation = true;
+  } else {
+    if(sub){
+      std::vector<OptionSpec> combinedOpts = spec->options;
+      combinedOpts.insert(combinedOpts.end(), sub->options.begin(), sub->options.end());
+      auto ctx = analyzePositionalPathContext(sub->positional, /*startIdx*/2, combinedOpts, toks, sw, buf);
+      if(ctx.appliesToCurrentWord){
+        expected = ctx.kind;
+        hasExpectation = true;
+      }
+    } else {
+      auto ctx = analyzePositionalPathContext(spec->positional, /*startIdx*/1, spec->options, toks, sw, buf);
+      if(ctx.appliesToCurrentWord){
+        expected = ctx.kind;
+        hasExpectation = true;
+      }
+    }
+  }
+
+  if(!hasExpectation) return std::nullopt;
+
+  struct stat st{};
+  if(::stat(sw.word.c_str(), &st)!=0){
+    bool hasCand = std::any_of(cand.labels.begin(), cand.labels.end(), [&](const std::string& lab){
+      return startsWith(lab, sw.word);
+    });
+    if(!hasCand) return std::string("不存在");
+    return std::nullopt;
+  }
+  bool isDir = S_ISDIR(st.st_mode);
+  bool isFile = S_ISREG(st.st_mode);
+  if(expected == PathKind::Dir && !isDir) return std::string("需要目录");
+  if(expected == PathKind::File && !isFile) return std::string("需要文件");
+  return std::nullopt;
 }
 
 static std::string contextGhostFor(const std::string& buf){
@@ -339,11 +477,19 @@ int main(){
     }
     if(ghost.empty()) ghost = contextGhostFor(buf);
 
+    auto pathError = detectPathErrorMessage(buf, cand);
+
     std::cout << ansi::CLR
               << ansi::WHITE << status << ansi::RESET
               << ansi::CYAN << ansi::BOLD << PLAIN_PROMPT << ansi::RESET
-              << ansi::WHITE << buf << ansi::RESET
-              << (ghost.empty()? "" : std::string(ansi::GRAY)+ghost+ansi::RESET);
+              << ansi::WHITE << sw.before << ansi::RESET;
+    if(pathError){
+      std::cout << ansi::RED << sw.word << ansi::RESET
+                << ansi::YELLOW << "+" << *pathError << ansi::RESET;
+    }else{
+      std::cout << ansi::WHITE << sw.word << ansi::RESET;
+    }
+    std::cout << (ghost.empty()? "" : std::string(ansi::GRAY)+ghost+ansi::RESET);
     std::cout.flush();
 
     if(haveCand){
