@@ -31,6 +31,7 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"completion.subsequence", {SettingValueKind::Boolean, {"false", "true"}}},
     {"language", {SettingValueKind::String, {}}},
     {"ui.path_error_hint", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"message.folder", {SettingValueKind::String, {}}},
   };
   return infos;
 }
@@ -140,6 +141,8 @@ inline void load_settings(const std::string& path){
       if(!val.empty()){ g_settings.language = val; settings_register_language(val); }
     }else if(key=="ui.path_error_hint"){
       bool b; if(parseBool(val,b)) g_settings.showPathErrorHint = b;
+    }else if(key=="message.folder"){
+      g_settings.messageWatchFolder = val;
     }
   }
 }
@@ -152,6 +155,7 @@ inline void save_settings(const std::string& path){
   out << "completion.subsequence=" << (g_settings.completionSubsequence? "true" : "false") << "\n";
   out << "language=" << g_settings.language << "\n";
   out << "ui.path_error_hint=" << (g_settings.showPathErrorHint? "true" : "false") << "\n";
+  out << "message.folder=" << g_settings.messageWatchFolder << "\n";
 }
 
 inline void apply_settings_to_runtime(){
@@ -173,6 +177,9 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="ui.path_error_hint"){
     value = g_settings.showPathErrorHint? "true" : "false"; return true;
+  }
+  if(key=="message.folder"){
+    value = g_settings.messageWatchFolder; return true;
   }
   return false;
 }
@@ -222,6 +229,11 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
       return false;
     }
     g_settings.showPathErrorHint = b;
+    return true;
+  }
+  if(key=="message.folder"){
+    g_settings.messageWatchFolder = value;
+    message_set_watch_folder(value);
     return true;
   }
   error = "unknown_key";
