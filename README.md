@@ -11,6 +11,15 @@ g++ -std=c++17 main.cpp -o mycli
 
 程序会以原始模式读取键盘输入，可使用 `Ctrl+C` 或输入 `exit` / `quit` 退出。
 
+需要配置如下 .env 文件：
+```
+LLM_API_KEY=your-api-key
+LLM_BASE_URL=https://api.moonshot.cn/v1
+LLM_MODEL=kimi-k2-turbo-preview
+LLM_TEMPERATURE=0.6
+HOME_PATH=settings
+```
+
 ## 主要特性
 
 - **命令注册与帮助**：通过 `ToolRegistry` 注册内置工具，可使用 `help` 查看命令说明。
