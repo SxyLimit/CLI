@@ -12,7 +12,9 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
   auto sw = splitLastWord(fullBuf);
   for(dirent* e = ::readdir(d); e; e = ::readdir(d)){
     std::string name = e->d_name; if(name=="."||name=="..") continue;
-    if(!base.empty() && !startsWith(name, base)) continue;
+    MatchResult match = compute_match(name, base);
+    if(!base.empty() && !match.matched) continue;
+    if(base.empty() && !match.matched) match.matched = true;
     std::string cand = dir + name;
     struct stat st{}; std::string pth = root + (root.back()=='/'? "" : "/") + name;
     bool isDir=false, isFile=false;
@@ -23,14 +25,24 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
     bool accept = (kind==PathKind::Any) || (kind==PathKind::Dir && isDir) || (kind==PathKind::File && isFile);
     if(!accept) continue;
     if(isDir) cand += "/";
+    std::vector<int> positions;
+    for(size_t i=0;i<dir.size();++i) positions.push_back(static_cast<int>(i));
+    for(int pos : match.positions) positions.push_back(static_cast<int>(dir.size() + pos));
+    if(isDir){ /* no change */ }
     out.items.push_back(sw.before + cand);
     out.labels.push_back(cand);
+    std::sort(positions.begin(), positions.end());
+    out.matchPositions.push_back(std::move(positions));
   }
   ::closedir(d);
   std::vector<size_t> idx(out.labels.size()); for(size_t i=0;i<idx.size();++i) idx[i]=i;
   std::sort(idx.begin(),idx.end(),[&](size_t a,size_t b){ return out.labels[a] < out.labels[b]; });
   Candidates s; s.items.reserve(idx.size()); s.labels.reserve(idx.size());
-  for(size_t k: idx){ s.items.push_back(out.items[k]); s.labels.push_back(out.labels[k]); }
+  for(size_t k: idx){
+    s.items.push_back(out.items[k]);
+    s.labels.push_back(out.labels[k]);
+    s.matchPositions.push_back(out.matchPositions[k]);
+  }
   return s;
 }
 
@@ -103,30 +115,77 @@ inline std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& 
 // =================== Built-in Tools ===================
 inline ToolSpec make_show(){
   ToolSpec t; t.name="show"; t.summary="Show system information (config|logs)";
+  set_tool_summary_locale(t, "en", "Show system information (config|logs)");
+  set_tool_summary_locale(t, "zh", "显示系统信息（config|logs）");
   t.subs = {
-    SubcommandSpec{"config", {}, {}, {}, [](const std::vector<std::string>&){ std::cout<<"theme = default\nmodel = alpha\n"; }},
-    SubcommandSpec{"logs",   {}, {}, {}, [](const std::vector<std::string>&){ std::cout<<"3 fake log lines...\n2 fake log lines...\n1 fake log line...\n"; }}
+    SubcommandSpec{"config", {}, {}, {}, [](const std::vector<std::string>&){
+      std::cout<<tr("show_config_output");
+    }},
+    SubcommandSpec{"logs",   {}, {}, {}, [](const std::vector<std::string>&){
+      std::cout<<tr("show_logs_output");
+    }}
   };
-  t.handler = [](const std::vector<std::string>&){ std::cout<<"usage: show [config|logs]\n"; };
+  t.handler = [](const std::vector<std::string>&){
+    std::cout<<tr("show_usage")<<"\n";
+  };
   return t;
 }
 inline ToolSpec make_config(){
-  ToolSpec t; t.name="config"; t.summary="Get or set config values";
+  ToolSpec t; t.name="config"; t.summary="Manage CLI configuration";
+  set_tool_summary_locale(t, "en", "Manage CLI configuration");
+  set_tool_summary_locale(t, "zh", "管理 CLI 配置");
   t.subs = {
     SubcommandSpec{"get", {}, {"<key>"}, {}, [](const std::vector<std::string>& a){
-      if(a.size()>=2) std::cout<<"config "<<a[1]<<" = demo\n";
-      else { std::cout<<"usage: config get <key>\n"; g_parse_error_cmd="config"; }
+      if(a.size()<2){
+        std::cout<<tr("config_get_usage")<<"\n";
+        g_parse_error_cmd="config";
+        return;
+      }
+      std::string value;
+      if(!config_get_value(a[1], value)){
+        std::cout<<trFmt("config_unknown_key", {{"key", a[1]}})<<"\n";
+        g_parse_error_cmd="config";
+        return;
+      }
+      std::cout<<trFmt("config_get_value", {{"key", a[1]}, {"value", value}})<<"\n";
     }},
     SubcommandSpec{"set", {}, {"<key>","<value>"}, {}, [](const std::vector<std::string>& a){
-      if(a.size()>=3) std::cout<<"set "<<a[1]<<" -> "<<a[2]<<" ✓\n";
-      else { std::cout<<"usage: config set <key> <value>\n"; g_parse_error_cmd="config"; }
+      if(a.size()<3){
+        std::cout<<tr("config_set_usage")<<"\n";
+        g_parse_error_cmd="config";
+        return;
+      }
+      std::string error;
+      if(!config_set_value(a[1], a[2], error)){
+        if(error=="unknown_key"){
+          std::cout<<trFmt("config_unknown_key", {{"key", a[1]}})<<"\n";
+        }else{
+          std::cout<<trFmt("config_invalid_value", {{"key", a[1]}, {"value", a[2]}})<<"\n";
+        }
+        g_parse_error_cmd="config";
+        return;
+      }
+      save_config(config_file_path());
+      std::cout<<trFmt("config_set_success", {{"key", a[1]}, {"value", a[2]}})<<"\n";
     }},
+    SubcommandSpec{"list", {}, {}, {}, [](const std::vector<std::string>&){
+      std::cout<<tr("config_list_header")<<"\n";
+      auto keys = config_list_keys();
+      for(auto &k : keys){
+        std::string value; config_get_value(k, value);
+        std::cout<<"  "<<k<<" = "<<value<<"\n";
+      }
+    }}
   };
-  t.handler = [](const std::vector<std::string>&){ std::cout<<"usage: config get <k> | config set <k> <v>\n"; };
+  t.handler = [](const std::vector<std::string>&){
+    std::cout<<tr("config_usage")<<"\n";
+  };
   return t;
 }
 inline ToolSpec make_run(){
   ToolSpec t; t.name="run"; t.summary="Run a demo job with options";
+  set_tool_summary_locale(t, "en", "Run a demo job with options");
+  set_tool_summary_locale(t, "zh", "运行示例任务（带参数）");
   t.options = {
     {"--model", true, {"alpha","bravo","charlie","delta"}, nullptr, false, "<name>", false},
     {"--topk",  true, {"1","3","5","8","10"},             nullptr, false, "<k>",    false},
@@ -149,7 +208,9 @@ inline ToolSpec make_run(){
 }
 inline ToolSpec make_cd(){
   // -o: Omit；-o -a: Hidden；-o -c: Full；否则 cd <path>
-  ToolSpec t; t.name="cd"; t.summary="Change directory; -o (omit); -o -a (hide); -o -c (full)";
+  ToolSpec t; t.name="cd"; t.summary="Change directory";
+  set_tool_summary_locale(t, "en", "Change directory");
+  set_tool_summary_locale(t, "zh", "切换目录");
   t.positional={"<dir>"}; // 关键：占位符含 <dir> → 自动路径补全并限制目录
   t.handler=[](const std::vector<std::string>& a){
     bool flag_o=false, flag_a=false, flag_c=false;
@@ -160,10 +221,27 @@ inline ToolSpec make_cd(){
       else if(a[i]=="-c") flag_c=true;
       else rest.push_back(a[i]);
     }
-    if(flag_o && flag_a){ g_cwd_mode = CwdMode::Hidden; return; }
-    if(flag_o && flag_c){ g_cwd_mode = CwdMode::Full;  return; }
-    if(flag_o){ g_cwd_mode = CwdMode::Omit; return; }
-    if(rest.empty()){ std::cout<<"usage: cd <path> | cd -o | cd -o -a | cd -o -c\n"; g_parse_error_cmd="cd"; return; }
+    if(flag_o){
+      std::string mode = "omit";
+      if(flag_a) mode = "hidden";
+      else if(flag_c) mode = "full";
+      std::string error;
+      if(config_set_value("prompt.cwd", mode, error)){
+        save_config(config_file_path());
+        std::string modeLabel = tr(std::string("mode.")+mode);
+        std::cout<<trFmt("cd_mode_updated", {{"mode", modeLabel}})<<"\n";
+        return;
+      }
+      std::cout<<tr("cd_mode_error")<<"\n";
+      g_parse_error_cmd="cd";
+      return;
+    }
+    if(flag_a || flag_c){
+      std::cout<<tr("cd_usage")<<"\n";
+      g_parse_error_cmd="cd";
+      return;
+    }
+    if(rest.empty()){ std::cout<<tr("cd_usage")<<"\n"; g_parse_error_cmd="cd"; return; }
     const std::string& path = rest[0];
     if(::chdir(path.c_str())==0){ char buf[4096]; if(getcwd(buf,sizeof(buf))) std::cout<<buf<<"\n"; }
     else { std::perror("cd"); }
@@ -172,6 +250,8 @@ inline ToolSpec make_cd(){
 }
 inline ToolSpec make_ls(){
   ToolSpec t; t.name="ls"; t.summary="List directory (simple)";
+  set_tool_summary_locale(t, "en", "List directory (simple)");
+  set_tool_summary_locale(t, "zh", "列出目录（简化版）");
   t.options={{"-a",false,{},nullptr,false,"",false},{"-l",false,{},nullptr,false,"",false}};
   t.positional={"[<path>]"}; // 若作为位置参，也会自动路径补全
   t.handler=[](const std::vector<std::string>& a){
@@ -197,6 +277,8 @@ inline ToolSpec make_ls(){
 }
 inline ToolSpec make_cat(){
   ToolSpec t; t.name="cat"; t.summary="Print file content (<=1MB, UTF-8)";
+  set_tool_summary_locale(t, "en", "Print file content (<=1MB, UTF-8)");
+  set_tool_summary_locale(t, "zh", "输出文件内容（<=1MB，UTF-8）");
   t.positional={"<file>"}; // 关键：<file> → 自动路径补全
   t.handler=[](const std::vector<std::string>& a){
     if(a.size()<2){ std::cout<<"usage: cat <file>\n"; g_parse_error_cmd="cat"; return; }
@@ -241,6 +323,7 @@ inline void register_tools_from_config(const std::string& path){
 
   struct TmpTool {
     std::string summary, type="system", exec, script, options, positional, optionPaths;
+    std::map<std::string, std::string> summaryLocales;
     std::map<std::string, std::vector<std::string>> optvalues;
     struct TmpSub {
       std::string name, options, positional, optionPaths;
@@ -267,6 +350,10 @@ inline void register_tools_from_config(const std::string& path){
     TmpTool& T = all[tool];
     if(sub.empty()){
       if(k=="summary") T.summary = v;
+      else if(k.rfind("summary.",0)==0){
+        auto lang = k.substr(8);
+        if(!lang.empty()) T.summaryLocales[lang] = v;
+      }
       else if(k=="type") T.type = v;
       else if(k=="exec") T.exec = v;
       else if(k=="script") T.script = v;
@@ -303,6 +390,7 @@ inline void register_tools_from_config(const std::string& path){
     TmpTool& T = kv.second;
 
     ToolSpec tool; tool.name = name; tool.summary = T.summary;
+    tool.summaryLocales = T.summaryLocales;
 
     std::set<std::string> topPathOpts;
     for(auto& s : splitCSV(T.optionPaths)) topPathOpts.insert(s);
