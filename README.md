@@ -18,16 +18,22 @@ g++ -std=c++17 main.cpp -o mycli
 - **候选提示与 Ghost 文本**：在输入行下方展示至多三个候选项，输入末尾补全不存在时给出上下文提示。
 - **状态栏扩展**：可通过 `StatusProvider` 注册自定义状态（示例中显示当前工作目录）。
 - **外部工具配置**：支持在 `mycli_tools.conf` 中用 INI 语法新增命令及子命令，含互斥选项、动态执行等。
-- **消息提醒**：可以对指定文件夹中新建的 `.md` 文件进行监控，未读消息会在提示符前显示红色星标，通过 `message` 命令查看。
+- **消息提醒**：可监听指定目录（默认当前目录下的 `message/`）中的 `.md` 文件，新建或修改后提示符前会显示红色 `[M]`，通过 `message list/last/detail` 查看。
+- **可定制提示符**：通过设置 `prompt.name` 与 `prompt.theme` 自定义提示符名称及颜色（支持蓝色与蓝紫渐变）。
 - **LLM 接口**：提供 `llm` 命令，调用 `tools/llm.py` 通过 OpenAI 接口（或本地回显模式）完成调用与历史查看。
 
 ## 消息提醒与查看
 
-1. 使用 `setting set message.folder <路径>` 指定需要监听的目录。
-2. 当该目录中新建 `.md` 文件时，提示符前会出现红色 `★`，表示有未读消息。
-3. 执行 `message` 命令即可依次查看新文件内容，阅读后红星会自动消失。
+1. 默认监听当前目录下的 `message/` 文件夹，可使用 `setting set message.folder <路径>` 改为其他目录。
+2. 当监听目录中的 `.md` 文件新建或修改时，提示符前会出现红色 `[M]`，表示仍有未读内容。
+3. 使用 `message list` 查看所有未读文件，`message last` 查看最近修改的文件内容，或通过 `message detail <文件名>` 定位并阅读指定文件。
 
 若要取消监听，可运行 `setting set message.folder ""` 将路径清空。
+
+## 提示符名称与主题
+
+- `setting set prompt.name <名称>`：调整提示符名称，留空则恢复默认的 `mycli`。
+- `setting set prompt.theme <blue|blue-purple>`：在纯蓝和蓝紫渐变主题之间切换，仅影响提示符名称部分。
 
 ## LLM 命令使用说明
 
@@ -37,6 +43,8 @@ g++ -std=c++17 main.cpp -o mycli
 - `llm recall`：查看最近一次调用的提示词与回复。
 
 默认使用 `gpt-4o-mini` 模型，可通过环境变量 `MYCLI_LLM_MODEL` 自定义；使用 OpenAI 接口时需配置 `OPENAI_API_KEY`。若未设置密钥或缺少依赖，则脚本会退化为本地回显模式，方便调试。
+
+当检测到新的历史记录时，提示符前会出现红色 `[L]` 提醒，可通过执行 `llm recall` 清除。
 
 ## 在配置文件中接入外部接口
 

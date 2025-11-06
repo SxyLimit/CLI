@@ -151,7 +151,9 @@ inline ToolSpec make_llm(){
       cmd += shellEscape(args[i]);
     }
     int rc = std::system(cmd.c_str());
+    llm_poll();
     if(rc!=0) g_parse_error_cmd = "llm";
+    else llm_mark_seen();
   }};
   SubcommandSpec recall{"recall", {}, {}, {}, [](const std::vector<std::string>& args){
     if(args.size()>2){
@@ -161,7 +163,9 @@ inline ToolSpec make_llm(){
     }
     std::string cmd = "python3 tools/llm.py recall";
     int rc = std::system(cmd.c_str());
+    llm_poll();
     if(rc!=0) g_parse_error_cmd = "llm";
+    else llm_mark_seen();
   }};
   t.subs = {call, recall};
   t.handler = [](const std::vector<std::string>&){
@@ -174,36 +178,98 @@ inline ToolSpec make_message(){
   ToolSpec t; t.name="message"; t.summary="Show unread markdown notifications";
   set_tool_summary_locale(t, "en", "Show unread markdown notifications");
   set_tool_summary_locale(t, "zh", "查看未读的 Markdown 通知");
-  t.handler = [](const std::vector<std::string>&){
-    message_poll();
+
+  auto ensureFolderConfigured = []()->bool{
     const std::string& folder = message_watch_folder();
     if(folder.empty()){
       std::cout<<"message folder not configured. Use `setting set message.folder <path>` first.\n";
-      return;
+      return false;
     }
-    auto unread = message_consume_unread();
-    if(unread.empty()){
-      std::cout<<"No new markdown files detected in "<<folder<<".\n";
-      return;
+    return true;
+  };
+
+  auto formatTime = [](std::time_t ts){
+    char buf[64];
+    if(std::tm* lt = std::localtime(&ts)){
+      if(std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", lt)){
+        return std::string(buf);
+      }
     }
-    for(size_t idx=0; idx<unread.size(); ++idx){
-      const std::string& path = unread[idx];
-      std::cout<<"--- "<<path<<" ---\n";
-      std::ifstream in(path);
-      if(!in.good()){
-        std::cout<<"[message] unable to open file\n";
-        continue;
-      }
-      std::string line;
-      while(std::getline(in, line)){
-        std::cout<<line<<"\n";
-      }
-      if(in.fail() && !in.eof()){
-        std::cout<<"[message] error reading file\n";
-      }
-      std::cout<<std::flush;
-      if(idx + 1 < unread.size()) std::cout<<"\n";
+    std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(ts));
+    return std::string(buf);
+  };
+
+  auto printFile = [](const std::string& path){
+    std::ifstream in(path);
+    if(!in.good()){
+      std::cout<<"[message] unable to open file\n";
+      return false;
     }
+    std::string line;
+    while(std::getline(in, line)){
+      std::cout<<line<<"\n";
+    }
+    if(in.fail() && !in.eof()){
+      std::cout<<"[message] error reading file\n";
+    }
+    return true;
+  };
+
+  t.subs = {
+    SubcommandSpec{"list", {}, {}, {}, [ensureFolderConfigured, formatTime](const std::vector<std::string>&){
+      message_poll();
+      if(!ensureFolderConfigured()) return;
+      auto pending = message_pending_files();
+      const std::string& folder = message_watch_folder();
+      if(pending.empty()){
+        std::cout<<"No modified markdown files detected in "<<folder<<".\n";
+        return;
+      }
+      std::cout<<"Modified markdown files in "<<folder<<":\n";
+      for(const auto& info : pending){
+        std::string tag = info.isNew? "[NEW]" : "[UPDATED]";
+        std::cout<<"  "<<tag<<" "<<basenameOf(info.path)
+                 <<"  ("<<formatTime(info.modifiedAt)<<")\n";
+      }
+    }},
+    SubcommandSpec{"last", {}, {}, {}, [ensureFolderConfigured, printFile](const std::vector<std::string>&){
+      message_poll();
+      if(!ensureFolderConfigured()) return;
+      auto pending = message_pending_files();
+      const std::string& folder = message_watch_folder();
+      if(pending.empty()){
+        std::cout<<"No modified markdown files detected in "<<folder<<".\n";
+        return;
+      }
+      const auto& info = pending.front();
+      std::cout<<"--- "<<info.path<<" ---\n";
+      if(printFile(info.path)){
+        message_mark_read(info.path);
+      }
+    }},
+    SubcommandSpec{"detail", {}, {"<file>"}, {}, [ensureFolderConfigured, printFile](const std::vector<std::string>& args){
+      if(args.size()<3){
+        std::cout<<"usage: message detail <file>\n";
+        g_parse_error_cmd = "message";
+        return;
+      }
+      message_poll();
+      if(!ensureFolderConfigured()) return;
+      auto resolved = message_resolve_label(args[2]);
+      if(!resolved){
+        std::cout<<"message file not found: "<<args[2]<<"\n";
+        g_parse_error_cmd = "message";
+        return;
+      }
+      std::cout<<"--- "<<*resolved<<" ---\n";
+      if(printFile(*resolved)){
+        message_mark_read(*resolved);
+      }
+    }}
+  };
+
+  t.handler = [](const std::vector<std::string>&){
+    std::cout<<"usage: message <list|last|detail>\n";
   };
   return t;
 }

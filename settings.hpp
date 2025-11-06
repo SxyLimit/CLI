@@ -32,6 +32,8 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"language", {SettingValueKind::String, {}}},
     {"ui.path_error_hint", {SettingValueKind::Boolean, {"false", "true"}}},
     {"message.folder", {SettingValueKind::String, {}}},
+    {"prompt.name", {SettingValueKind::String, {}}},
+    {"prompt.theme", {SettingValueKind::Enum, {"blue", "blue-purple"}}},
   };
   return infos;
 }
@@ -99,6 +101,8 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
       if(key=="language"){
         const auto& langs = settings_known_languages();
         out.assign(langs.begin(), langs.end());
+      }else if(key=="prompt.name"){
+        // no predefined suggestions
       }
       break;
   }
@@ -143,6 +147,14 @@ inline void load_settings(const std::string& path){
       bool b; if(parseBool(val,b)) g_settings.showPathErrorHint = b;
     }else if(key=="message.folder"){
       g_settings.messageWatchFolder = val;
+    }else if(key=="prompt.name"){
+      g_settings.promptName = val.empty()? "mycli" : val;
+    }else if(key=="prompt.theme"){
+      std::string t = val;
+      std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+      if(t=="blue" || t=="blue-purple"){
+        g_settings.promptTheme = t;
+      }
     }
   }
 }
@@ -156,6 +168,8 @@ inline void save_settings(const std::string& path){
   out << "language=" << g_settings.language << "\n";
   out << "ui.path_error_hint=" << (g_settings.showPathErrorHint? "true" : "false") << "\n";
   out << "message.folder=" << g_settings.messageWatchFolder << "\n";
+  out << "prompt.name=" << g_settings.promptName << "\n";
+  out << "prompt.theme=" << g_settings.promptTheme << "\n";
 }
 
 inline void apply_settings_to_runtime(){
@@ -180,6 +194,12 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="message.folder"){
     value = g_settings.messageWatchFolder; return true;
+  }
+  if(key=="prompt.name"){
+    value = g_settings.promptName; return true;
+  }
+  if(key=="prompt.theme"){
+    value = g_settings.promptTheme; return true;
   }
   return false;
 }
@@ -234,6 +254,20 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
   if(key=="message.folder"){
     g_settings.messageWatchFolder = value;
     message_set_watch_folder(value);
+    return true;
+  }
+  if(key=="prompt.name"){
+    g_settings.promptName = value.empty()? "mycli" : value;
+    return true;
+  }
+  if(key=="prompt.theme"){
+    std::string t = value;
+    std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+    if(!(t=="blue" || t=="blue-purple")){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.promptTheme = t;
     return true;
   }
   error = "unknown_key";

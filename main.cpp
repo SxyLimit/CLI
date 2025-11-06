@@ -68,11 +68,24 @@ static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18
 
 struct MessageWatcherState {
   std::string folder;
-  std::set<std::string> known;
-  std::vector<std::string> unread;
+  std::map<std::string, std::time_t> known;
+  std::map<std::string, std::time_t> seen;
 };
 
 static MessageWatcherState g_message_watcher;
+
+static std::vector<PromptBadge> g_prompt_badges;
+
+struct LlmWatcherState {
+  std::string path;
+  std::time_t knownMtime = 0;
+  std::time_t seenMtime = 0;
+  off_t knownSize = 0;
+  off_t seenSize = 0;
+  bool initialized = false;
+};
+
+static LlmWatcherState g_llm_watcher;
 
 static std::string joinPath(const std::string& dir, const std::string& name){
   if(dir.empty()) return name;
@@ -115,12 +128,13 @@ static std::vector<std::pair<std::string, std::time_t>> collectMarkdownFiles(con
 
 void message_set_watch_folder(const std::string& path){
   g_message_watcher.folder = path;
-  g_message_watcher.unread.clear();
   g_message_watcher.known.clear();
+  g_message_watcher.seen.clear();
   if(path.empty()) return;
   auto files = collectMarkdownFiles(path);
   for(const auto& item : files){
-    g_message_watcher.known.insert(item.first);
+    g_message_watcher.known[item.first] = item.second;
+    g_message_watcher.seen[item.first] = item.second;
   }
 }
 
@@ -131,32 +145,202 @@ const std::string& message_watch_folder(){
 void message_poll(){
   if(g_message_watcher.folder.empty()) return;
   auto files = collectMarkdownFiles(g_message_watcher.folder);
-  std::set<std::string> current;
-  std::vector<std::pair<std::string, std::time_t>> newly;
+  std::map<std::string, std::time_t> current;
   for(const auto& item : files){
-    current.insert(item.first);
-    if(!g_message_watcher.known.count(item.first)){
-      newly.push_back(item);
-    }
+    current[item.first] = item.second;
   }
-  for(const auto& item : newly){
-    g_message_watcher.unread.push_back(item.first);
+  for(auto it = g_message_watcher.seen.begin(); it != g_message_watcher.seen.end(); ){
+    if(current.find(it->first)==current.end()) it = g_message_watcher.seen.erase(it);
+    else ++it;
   }
   g_message_watcher.known = std::move(current);
 }
 
 bool message_has_unread(){
-  return !g_message_watcher.unread.empty();
+  for(const auto& kv : g_message_watcher.known){
+    auto it = g_message_watcher.seen.find(kv.first);
+    std::time_t seen = (it==g_message_watcher.seen.end())? 0 : it->second;
+    if(seen != kv.second) return true;
+  }
+  return false;
 }
 
 std::vector<std::string> message_peek_unread(){
-  return g_message_watcher.unread;
+  std::vector<std::string> out;
+  auto pending = message_pending_files();
+  for(const auto& info : pending){
+    out.push_back(info.path);
+  }
+  return out;
 }
 
 std::vector<std::string> message_consume_unread(){
-  auto out = g_message_watcher.unread;
-  g_message_watcher.unread.clear();
+  std::vector<std::string> out;
+  auto pending = message_pending_files();
+  for(const auto& info : pending){
+    out.push_back(info.path);
+    message_mark_read(info.path);
+  }
   return out;
+}
+
+std::vector<MessageFileInfo> message_all_files(){
+  std::vector<MessageFileInfo> files;
+  for(const auto& kv : g_message_watcher.known){
+    MessageFileInfo info;
+    info.path = kv.first;
+    info.modifiedAt = kv.second;
+    auto it = g_message_watcher.seen.find(kv.first);
+    if(it==g_message_watcher.seen.end()){
+      info.isUnread = true;
+      info.isNew = true;
+    }else{
+      info.isUnread = (it->second != kv.second);
+      info.isNew = false;
+    }
+    files.push_back(std::move(info));
+  }
+  std::sort(files.begin(), files.end(), [](const MessageFileInfo& a, const MessageFileInfo& b){
+    if(a.modifiedAt == b.modifiedAt) return a.path < b.path;
+    return a.modifiedAt > b.modifiedAt;
+  });
+  return files;
+}
+
+std::vector<MessageFileInfo> message_pending_files(){
+  std::vector<MessageFileInfo> pending;
+  auto all = message_all_files();
+  for(auto& info : all){
+    if(info.isUnread) pending.push_back(info);
+  }
+  return pending;
+}
+
+bool message_mark_read(const std::string& path){
+  auto it = g_message_watcher.known.find(path);
+  if(it==g_message_watcher.known.end()) return false;
+  g_message_watcher.seen[path] = it->second;
+  return true;
+}
+
+std::optional<std::string> message_resolve_label(const std::string& label){
+  if(label.empty()) return std::nullopt;
+  auto all = message_all_files();
+  for(const auto& info : all){
+    if(info.path == label) return info.path;
+  }
+  std::vector<std::string> matches;
+  matches.reserve(all.size());
+  for(const auto& info : all){
+    if(basenameOf(info.path) == label) matches.push_back(info.path);
+  }
+  if(matches.size()==1) return matches.front();
+  if(matches.empty()){
+    const std::string& folder = message_watch_folder();
+    if(!folder.empty()){
+      std::string candidate = joinPath(folder, label);
+      for(const auto& info : all){
+        if(info.path == candidate) return info.path;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+std::vector<std::string> message_all_file_labels(){
+  std::vector<std::string> labels;
+  std::set<std::string> seen;
+  for(const auto& info : message_all_files()){
+    std::string name = basenameOf(info.path);
+    if(seen.insert(name).second){
+      labels.push_back(std::move(name));
+    }
+  }
+  return labels;
+}
+
+void register_prompt_badge(const PromptBadge& badge){
+  g_prompt_badges.push_back(badge);
+}
+
+static std::string resolve_llm_history_path(){
+  if(!g_llm_watcher.path.empty()) return g_llm_watcher.path;
+  const char* home = std::getenv("HOME");
+  if(home && *home){
+    return std::string(home) + "/.mycli_llm_history.json";
+  }
+  return std::string(".mycli_llm_history.json");
+}
+
+void llm_initialize(){
+  if(g_llm_watcher.initialized) return;
+  g_llm_watcher.path = resolve_llm_history_path();
+  g_llm_watcher.initialized = true;
+  struct stat st{};
+  if(!g_llm_watcher.path.empty() && ::stat(g_llm_watcher.path.c_str(), &st)==0){
+    g_llm_watcher.knownMtime = g_llm_watcher.seenMtime = st.st_mtime;
+    g_llm_watcher.knownSize = g_llm_watcher.seenSize = st.st_size;
+  }else{
+    g_llm_watcher.knownMtime = g_llm_watcher.seenMtime = 0;
+    g_llm_watcher.knownSize = g_llm_watcher.seenSize = 0;
+  }
+}
+
+void llm_poll(){
+  if(!g_llm_watcher.initialized) llm_initialize();
+  if(g_llm_watcher.path.empty()) return;
+  struct stat st{};
+  if(::stat(g_llm_watcher.path.c_str(), &st)==0){
+    g_llm_watcher.knownMtime = st.st_mtime;
+    g_llm_watcher.knownSize = st.st_size;
+  }else{
+    g_llm_watcher.knownMtime = 0;
+    g_llm_watcher.knownSize = 0;
+    g_llm_watcher.seenMtime = 0;
+    g_llm_watcher.seenSize = 0;
+  }
+}
+
+bool llm_has_unread(){
+  if(!g_llm_watcher.initialized) llm_initialize();
+  return g_llm_watcher.knownMtime != g_llm_watcher.seenMtime ||
+         g_llm_watcher.knownSize != g_llm_watcher.seenSize;
+}
+
+void llm_mark_seen(){
+  if(!g_llm_watcher.initialized) llm_initialize();
+  g_llm_watcher.seenMtime = g_llm_watcher.knownMtime;
+  g_llm_watcher.seenSize = g_llm_watcher.knownSize;
+}
+
+static std::string promptNamePlain(){
+  if(g_settings.promptName.empty()) return std::string("mycli");
+  return g_settings.promptName;
+}
+
+static std::string plainPromptText(){
+  return promptNamePlain() + "> ";
+}
+
+static std::string promptBadgesPlainText(){
+  std::set<char> letters;
+  for(const auto& badge : g_prompt_badges){
+    if(badge.letter==0) continue;
+    bool active = false;
+    try{
+      if(badge.active) active = badge.active();
+    }catch(...){
+      active = false;
+    }
+    if(active) letters.insert(badge.letter);
+  }
+  if(letters.empty()) return std::string();
+  std::string text;
+  text.reserve(letters.size()+2);
+  text.push_back('[');
+  for(char c : letters) text.push_back(c);
+  text.push_back(']');
+  return text;
 }
 
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value){
@@ -249,7 +433,6 @@ MatchResult compute_match(const std::string& candidate, const std::string& patte
 }
 
 // ===== Prompt params =====
-static const std::string PLAIN_PROMPT = "mycli> ";
 static const int extraLines = 3;
 
 static int displayWidth(const std::string& text){
@@ -300,10 +483,8 @@ static int highlightCursorOffset(const std::string& label, const std::vector<int
 }
 
 static int promptDisplayWidth(){
-  static int base = displayWidth(PLAIN_PROMPT);
-  int width = base;
-  if(message_has_unread()) width += 1;
-  return width;
+  std::string badges = promptBadgesPlainText();
+  return displayWidth(badges + plainPromptText());
 }
 
 // helper: 是否“路径型占位符”
@@ -479,6 +660,34 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
         }
         if(!out.items.empty()) return out;
       }
+    }
+  }
+
+  if(spec.name == "message" && sub && sub->name=="detail"){
+    bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
+    bool expectingArgument = false;
+    if(trailingSpace && toks.size()==2){
+      expectingArgument = true;
+    }else if(!trailingSpace && toks.size()>=3 && toks[2]==sw.word){
+      expectingArgument = true;
+    }
+    if(expectingArgument){
+      std::set<std::string> seen;
+      for(const auto& info : message_all_files()){
+        std::string label = basenameOf(info.path);
+        if(!seen.insert(label).second) continue;
+        MatchResult match = compute_match(label, sw.word);
+        if(!match.matched) continue;
+        out.items.push_back(sw.before + label);
+        out.labels.push_back(label);
+        out.matchPositions.push_back(match.positions);
+        std::string annotation;
+        if(info.isUnread){
+          annotation = info.isNew? "[NEW]" : "[UPDATED]";
+        }
+        out.annotations.push_back(annotation);
+      }
+      if(!out.items.empty()) return out;
     }
   }
 
@@ -700,9 +909,33 @@ static std::string contextGhostFor(const std::string& buf){
 
 // ===== Rendering =====
 static void renderPromptLabel(){
-  std::cout << ansi::CYAN << ansi::BOLD;
-  if(message_has_unread()) std::cout << ansi::RED << "★" << ansi::CYAN << ansi::BOLD;
-  std::cout << PLAIN_PROMPT << ansi::RESET;
+  std::string badges = promptBadgesPlainText();
+  if(!badges.empty()){
+    std::cout << ansi::RED << ansi::BOLD << badges << ansi::RESET;
+  }
+  const std::string name = promptNamePlain();
+  const std::string theme = g_settings.promptTheme;
+  if(theme == "blue-purple"){
+    if(!name.empty()){
+      std::cout << ansi::BOLD;
+      const int startR = 0, startG = 153, startB = 255;
+      const int endR = 128, endG = 0, endB = 255;
+      size_t len = name.size();
+      for(size_t i=0;i<len;++i){
+        double t = (len<=1)? 0.0 : static_cast<double>(i) / static_cast<double>(len-1);
+        int r = static_cast<int>(startR + (endR - startR) * t + 0.5);
+        int g = static_cast<int>(startG + (endG - startG) * t + 0.5);
+        int b = static_cast<int>(startB + (endB - startB) * t + 0.5);
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "\x1b[38;2;%d;%d;%dm", r, g, b);
+        std::cout << buf << name[i];
+      }
+      std::cout << ansi::RESET;
+    }
+    std::cout << ansi::CYAN << ansi::BOLD << "> " << ansi::RESET;
+  }else{
+    std::cout << ansi::CYAN << ansi::BOLD << name << "> " << ansi::RESET;
+  }
 }
 
 static void renderInputWithGhost(const std::string& status, int status_len,
@@ -824,6 +1057,10 @@ int main(){
   load_settings(settings_file_path());
   apply_settings_to_runtime();
   message_set_watch_folder(g_settings.messageWatchFolder);
+  llm_initialize();
+
+  register_prompt_badge(PromptBadge{"message", 'M', [](){ return message_has_unread(); }});
+  register_prompt_badge(PromptBadge{"llm", 'L', [](){ return llm_has_unread(); }});
 
   // 1) 注册内置工具与状态
   register_all_tools();
@@ -853,6 +1090,7 @@ int main(){
 
   while(true){
     message_poll();
+    llm_poll();
     std::string status = REG.renderStatusPrefix();
     int status_len = displayWidth(status);
 
