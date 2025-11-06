@@ -318,6 +318,9 @@ static Candidates firstWordCandidates(const std::string& buf){
 }
 
 static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf){
+  if(spec.name=="ToDoListEditor"){
+    return todoCandidates(spec, buf);
+  }
   Candidates out; auto sw=splitLastWord(buf); auto toks=splitTokens(buf);
   if(toks.empty() || toks[0]!=spec.name) return out;
 
@@ -581,6 +584,9 @@ static std::string contextGhostFor(const std::string& buf){
     return "";
   }
   const ToolSpec* spec = REG.find(toks[0]); if(!spec) return "";
+  if(spec->name=="ToDoListEditor"){
+    return todoContextGhost(*spec, toks);
+  }
   if(inSubcommandSlot(*spec, toks)) return " <subcommand>";
   if(!spec->subs.empty() && toks.size()>=2){
     for(auto &sub: spec->subs){
