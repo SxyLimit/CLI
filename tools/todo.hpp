@@ -20,6 +20,7 @@ struct TimeValueParseResult {
   bool hasValue = false;
   std::string periodSpec;          // e.g. "per 2d"
   std::chrono::seconds period{};
+  std::string error;               // human readable validation message
 };
 
 struct ToDoSubtask {

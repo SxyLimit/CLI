@@ -17,6 +17,8 @@
 using namespace std::chrono;
 
 const std::vector<std::string> kUrgencyLevels = {"none", "low", "normal", "high", "critical"};
+static constexpr const char* kTimeFormatHelp =
+    "时间格式错误：请使用 yyyy.mm.dd[ HH:MM[:SS]]，或相对时间 +1d/+2h/+30m/+45s，或周期 per d/per 2w/per m";
 
 namespace todo_detail {
 
@@ -287,7 +289,7 @@ bool ToDoManager::createTask(const TaskCreationOptions& opts, std::string& err){
   task.hasDeadline = false;
   if(opts.startInput){
     auto parsed = parseTimeValue(*opts.startInput, false);
-    if(!parsed.ok){ err="开始时间格式错误"; return false; }
+    if(!parsed.ok){ err = parsed.error.empty()? "开始时间格式错误" : parsed.error; return false; }
     if(parsed.hasValue){ task.startTime = parsed.value; task.hasStart = true; }
     if(!parsed.periodSpec.empty()){
       task.periodic = true;
@@ -297,7 +299,7 @@ bool ToDoManager::createTask(const TaskCreationOptions& opts, std::string& err){
   }
   if(opts.deadlineInput){
     auto parsed = parseTimeValue(*opts.deadlineInput, true);
-    if(!parsed.ok){ err="截止时间格式错误"; return false; }
+    if(!parsed.ok){ err = parsed.error.empty()? "截止时间格式错误" : parsed.error; return false; }
     if(parsed.hasValue){ task.deadline = parsed.value; task.hasDeadline = true; }
     if(!parsed.periodSpec.empty()){
       task.periodic = true;
@@ -309,7 +311,7 @@ bool ToDoManager::createTask(const TaskCreationOptions& opts, std::string& err){
   if(opts.periodInput){
     std::string norm;
     auto secs = todo_detail::parsePeriod(*opts.periodInput, norm);
-    if(secs.count()==0){ err="周期格式错误"; return false; }
+    if(secs.count()==0){ err="周期格式错误：示例 per d、per 2w、per 3m"; return false; }
     task.periodic = true;
     task.periodSpec = norm;
     task.periodInterval = secs;
@@ -369,7 +371,7 @@ bool ToDoManager::resetStart(const std::string& name, const std::string& value, 
   auto it = tasks_.find(name);
   if(it==tasks_.end()){ err="未找到任务"; return false; }
   auto parsed = parseTimeValue(value, false);
-  if(!parsed.ok){ err="开始时间格式错误"; return false; }
+  if(!parsed.ok){ err = parsed.error.empty()? "开始时间格式错误" : parsed.error; return false; }
   if(parsed.hasValue){ it->second.startTime = parsed.value; it->second.hasStart = true; }
   if(!parsed.periodSpec.empty()){
     it->second.periodic = true;
@@ -387,7 +389,7 @@ bool ToDoManager::resetDeadline(const std::string& name, const std::string& valu
   auto it = tasks_.find(name);
   if(it==tasks_.end()){ err="未找到任务"; return false; }
   auto parsed = parseTimeValue(value, true);
-  if(!parsed.ok){ err="截止时间格式错误"; return false; }
+  if(!parsed.ok){ err = parsed.error.empty()? "截止时间格式错误" : parsed.error; return false; }
   if(parsed.hasValue){ it->second.deadline = parsed.value; it->second.hasDeadline = true; }
   if(!parsed.periodSpec.empty()){
     it->second.periodic = true;
@@ -756,7 +758,7 @@ void ToDoManager::appendOperation(const std::string& line){
 TimeValueParseResult ToDoManager::parseTimeValue(const std::string& input, bool forDeadline) const{
   TimeValueParseResult res;
   std::string trimmed = todo_detail::trim(input);
-  if(trimmed.empty()) return res;
+  if(trimmed.empty()){ res.error = kTimeFormatHelp; return res; }
   if(trimmed[0]=='+'){
     std::string digits;
     char unit = 0;
@@ -765,7 +767,8 @@ TimeValueParseResult ToDoManager::parseTimeValue(const std::string& input, bool 
       if(std::isdigit(static_cast<unsigned char>(c))) digits.push_back(c);
       else { unit = c; break; }
     }
-    if(digits.empty() || unit==0){ return res; }
+    if(digits.empty()){ res.error = "时间格式错误：+ 后需要数字，例如 +3d"; return res; }
+    if(unit==0){ res.error = "时间格式错误：缺少单位，可使用 d/h/m/s"; return res; }
     long long value = std::stoll(digits);
     std::chrono::seconds offset(0);
     switch(unit){
@@ -773,7 +776,7 @@ TimeValueParseResult ToDoManager::parseTimeValue(const std::string& input, bool 
       case 'm': offset = std::chrono::minutes(1) * value; break;
       case 's': offset = std::chrono::seconds(1) * value; break;
       case 'h': offset = std::chrono::hours(1) * value; break;
-      default: return res;
+      default: res.error = "时间格式错误：单位必须为 d/h/m/s"; return res;
     }
     res.ok = true;
     res.hasValue = true;
@@ -782,7 +785,7 @@ TimeValueParseResult ToDoManager::parseTimeValue(const std::string& input, bool 
   }
   if(startsWith(trimmed, "per")){
     res.period = todo_detail::parsePeriod(trimmed, res.periodSpec);
-    if(res.period.count()==0){ res.ok=false; return res; }
+    if(res.period.count()==0){ res.ok=false; res.error = "周期格式错误：示例 per d、per 2w、per 3m"; return res; }
     res.ok = true;
     res.hasValue = true;
     if(forDeadline) res.value = now() + res.period;
@@ -797,6 +800,7 @@ TimeValueParseResult ToDoManager::parseTimeValue(const std::string& input, bool 
     res.value = std::chrono::system_clock::from_time_t(tt);
     return res;
   }
+  res.error = kTimeFormatHelp;
   return res;
 }
 
@@ -865,43 +869,47 @@ bool ToDoManager::parseAbsoluteDate(const std::string& input, std::tm& tm){
   auto nowTp = now();
   std::time_t t = std::chrono::system_clock::to_time_t(nowTp);
   localtime_r(&t, &cur);
-  tm.tm_year = cur.tm_year;
-  tm.tm_mon = cur.tm_mon;
-  tm.tm_mday = cur.tm_mday;
-  tm.tm_hour = 0;
-  tm.tm_min = 0;
-  tm.tm_sec = 0;
-  if(!datePart.empty()){
-    auto parts = todo_detail::splitBy(datePart, '.');
-    if(parts.size()==3){
-      tm.tm_year = std::stoi(parts[0]) - 1900;
-      tm.tm_mon = std::stoi(parts[1]) - 1;
-      tm.tm_mday = std::stoi(parts[2]);
-    }else if(parts.size()==2){
-      tm.tm_mon = std::stoi(parts[0]) - 1;
-      tm.tm_mday = std::stoi(parts[1]);
-    }else if(parts.size()==1){
-      tm.tm_mday = std::stoi(parts[0]);
-    }else{
-      return false;
+  try{
+    tm.tm_year = cur.tm_year;
+    tm.tm_mon = cur.tm_mon;
+    tm.tm_mday = cur.tm_mday;
+    tm.tm_hour = 0;
+    tm.tm_min = 0;
+    tm.tm_sec = 0;
+    if(!datePart.empty()){
+      auto parts = todo_detail::splitBy(datePart, '.');
+      if(parts.size()==3){
+        tm.tm_year = std::stoi(parts[0]) - 1900;
+        tm.tm_mon = std::stoi(parts[1]) - 1;
+        tm.tm_mday = std::stoi(parts[2]);
+      }else if(parts.size()==2){
+        tm.tm_mon = std::stoi(parts[0]) - 1;
+        tm.tm_mday = std::stoi(parts[1]);
+      }else if(parts.size()==1){
+        tm.tm_mday = std::stoi(parts[0]);
+      }else{
+        return false;
+      }
     }
-  }
-  if(!timePart.empty()){
-    auto parts = todo_detail::splitBy(timePart, ':');
-    if(parts.size()==3){
-      tm.tm_hour = std::stoi(parts[0]);
-      tm.tm_min = std::stoi(parts[1]);
-      tm.tm_sec = std::stoi(parts[2]);
-    }else if(parts.size()==2){
-      tm.tm_hour = std::stoi(parts[0]);
-      tm.tm_min = std::stoi(parts[1]);
-    }else if(parts.size()==1){
-      tm.tm_hour = std::stoi(parts[0]);
-    }else{
-      return false;
+    if(!timePart.empty()){
+      auto parts = todo_detail::splitBy(timePart, ':');
+      if(parts.size()==3){
+        tm.tm_hour = std::stoi(parts[0]);
+        tm.tm_min = std::stoi(parts[1]);
+        tm.tm_sec = std::stoi(parts[2]);
+      }else if(parts.size()==2){
+        tm.tm_hour = std::stoi(parts[0]);
+        tm.tm_min = std::stoi(parts[1]);
+      }else if(parts.size()==1){
+        tm.tm_hour = std::stoi(parts[0]);
+      }else{
+        return false;
+      }
     }
+    return true;
+  }catch(const std::exception&){
+    return false;
   }
-  return true;
 }
 
 std::string ToDoManager::joinList(const std::vector<std::string>& v, const std::string& sep){
@@ -1433,7 +1441,11 @@ static void handleQuery(const std::vector<std::string>& toks){
     return;
   }
   TimeValueParseResult res = mgr.parseTimeValue(toks[2], true);
-  if(!res.ok || !res.hasValue){ std::cout<<ansi::RED<<"时间格式错误"<<ansi::RESET<<"\n"; return; }
+  if(!res.ok || !res.hasValue){
+    std::string msg = res.error.empty()? std::string("时间格式错误") : res.error;
+    std::cout<<ansi::RED<<msg<<ansi::RESET<<"\n";
+    return;
+  }
   auto list = mgr.queryUpcoming(res.value);
   printTasksList(list);
 }
@@ -1594,6 +1606,35 @@ static std::vector<std::string> todoKeywordsAfterName(){
   return {"Add","StartTime","Deadline","Tag","Urgency","ProgressPercent","ProgressStep","Template","Subtask","Pre","Post","Category","Per"};
 }
 
+static std::vector<std::string> timeSuggestionList(){
+  std::vector<std::string> suggestions = {
+    "+15m","+30m","+1h","+6h","+12h","+1d","+3d","+7d","+30d",
+    "per d","per 2d","per w","per 2w","per m","per y"
+  };
+  auto addUnique = [&](const std::string& value){
+    if(value.empty()) return;
+    if(std::find(suggestions.begin(), suggestions.end(), value)==suggestions.end()) suggestions.push_back(value);
+  };
+  auto now = std::chrono::system_clock::now();
+  auto addFromStamp = [&](const std::chrono::system_clock::time_point& tp){
+    std::string stamp = ToDoManager::formatTime(tp);
+    auto space = stamp.find(' ');
+    if(space != std::string::npos){
+      addUnique(stamp.substr(0, space));
+      addUnique(stamp.substr(space+1));
+    }else{
+      addUnique(stamp);
+    }
+  };
+  addFromStamp(now);
+  addFromStamp(now + std::chrono::hours(24));
+  return suggestions;
+}
+
+static std::vector<std::string> periodSuggestionList(){
+  return {"per d","per 2d","per 3d","per w","per 2w","per m","per y"};
+}
+
 static Candidates listToCandidates(const std::vector<std::string>& list, const std::string& buf){
   Candidates cand;
   auto sw = splitLastWord(buf);
@@ -1637,8 +1678,8 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
         }
         if(prev=="Urgency") return listToCandidates(kUrgencyLevels, buf);
         if(prev=="Template") return listToCandidates(mgr.templateNames(), buf);
-        if(prev=="StartTime" || prev=="Deadline") return listToCandidates({"+1d","+3d","+7d","per d","per w","per m","per y"}, buf);
-        if(prev=="Per") return listToCandidates({"per d","per 2d","per w","per m","per y"}, buf);
+        if(prev=="StartTime" || prev=="Deadline") return listToCandidates(timeSuggestionList(), buf);
+        if(prev=="Per") return listToCandidates(periodSuggestionList(), buf);
       }
     }
   }else if(cmd=="Updata"){
@@ -1655,6 +1696,8 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
       }
       if(prev=="Urgency" && toks.back()==sw.word) return listToCandidates(kUrgencyLevels, buf);
       if(prev=="Progress" && toks.back()==sw.word) return listToCandidates({"Percent","Step"}, buf);
+      if((prev=="StartTime" || prev=="Deadline") && toks.back()==sw.word) return listToCandidates(timeSuggestionList(), buf);
+      if(prev=="Per" && toks.back()==sw.word) return listToCandidates(periodSuggestionList(), buf);
       if(prev=="Template" && toks.back()==sw.word) return listToCandidates({"Apply","Remove"}, buf);
       if(prev=="Subtask" && toks.back()==sw.word) return listToCandidates({"Add","Remove","Percent","Step"}, buf);
       if((prev=="Apply"||prev=="Remove") && toks.size()>=5 && toks.back()==sw.word){
@@ -1685,7 +1728,11 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
     if(toks.size()>=3 && toks.back()==sw.word) return listToCandidates({"per"}, buf);
   }else if(cmd=="Query"){
     if(toks.size()==2) return empty;
-    if(toks.size()>=3 && toks.back()==sw.word) return listToCandidates({"+1d","+3d","+7d","+30d","Tag"}, buf);
+    if(toks.size()>=3 && toks.back()==sw.word){
+      auto suggestions = timeSuggestionList();
+      suggestions.push_back("Tag");
+      return listToCandidates(suggestions, buf);
+    }
     if(toks.size()>=4 && toks[toks.size()-2]=="Tag" && toks.back()==sw.word){
       std::vector<std::string> cats(mgr.categorySet().begin(), mgr.categorySet().end());
       return listToCandidates(cats, buf);
