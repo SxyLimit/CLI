@@ -4,6 +4,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <clocale>
+#include <codecvt>
+#include <cwchar>
+#include <locale>
+#include <stdexcept>
 #include <cctype>
 #include <string>
 #include <vector>
@@ -21,9 +26,30 @@ bool         g_should_exit = false;
 std::string  g_parse_error_cmd;
 
 // ===== Prompt params =====
-static const int base_prompt_len = 7; // "mycli> "
 static const std::string PLAIN_PROMPT = "mycli> ";
 static const int extraLines = 3;
+
+static int displayWidth(const std::string& text){
+  static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
+  std::wstring ws;
+  try {
+    ws = conv.from_bytes(text);
+  } catch (const std::range_error&) {
+    return static_cast<int>(text.size());
+  }
+  int width = 0;
+  for (wchar_t ch : ws) {
+    int w = ::wcwidth(ch);
+    if (w < 0) w = 1;
+    width += w;
+  }
+  return width;
+}
+
+static int promptDisplayWidth(){
+  static int width = displayWidth(PLAIN_PROMPT);
+  return width;
+}
 
 // helper: 是否“路径型占位符”
 static bool isPathLikePlaceholder(const std::string& ph){
@@ -348,7 +374,7 @@ static void renderBelowThree(const std::string& status, int status_len,
   int total=(int)labels.size();
   int toShow = std::min(3, std::max(0, total-1));
   auto sw = splitLastWord(buf);
-  int indent = status_len + base_prompt_len + (int)sw.before.size();
+  int indent = status_len + promptDisplayWidth() + displayWidth(sw.before);
   for(int i=1;i<=toShow;++i){
     const std::string& label = labels[(sel+i)%total];
     std::string prefixWord = sw.word;
@@ -362,7 +388,7 @@ static void renderBelowThree(const std::string& status, int status_len,
   for(int pad=toShow; pad<lastShown; ++pad){ std::cout << "\n" << "\x1b[2K"; }
   int up = toShow + ((lastShown>toShow)? (lastShown-toShow):0);
   if(up>0) std::cout << ansi::CUU << up << "A";
-  int col = status_len + base_prompt_len + (int)buf.size() + 1;
+  int col = status_len + promptDisplayWidth() + displayWidth(buf) + 1;
   std::cout << ansi::CHA << col << "G" << std::flush;
   lastShown = toShow;
 }
@@ -434,6 +460,7 @@ static void printHelpOne(const std::string& name){
 
 // ===== Main =====
 int main(){
+  std::setlocale(LC_CTYPE, "");
   // 1) 注册内置工具与状态
   register_all_tools();
   register_status_providers();
@@ -462,7 +489,7 @@ int main(){
 
   while(true){
     std::string status = REG.renderStatusPrefix();
-    int status_len = (int)status.size();
+    int status_len = displayWidth(status);
 
     Candidates cand = computeCandidates(buf);
     auto sw = splitLastWord(buf);
@@ -494,7 +521,7 @@ int main(){
 
     if(haveCand){
       int toShow = std::min(3, std::max(0, total-1));
-      int indent = status_len + base_prompt_len + (int)sw.before.size();
+      int indent = status_len + promptDisplayWidth() + displayWidth(sw.before);
       for(int i=1;i<=toShow;++i){
         const std::string& label = cand.labels[(sel+i)%total];
         std::string prefixWord = sw.word;
@@ -508,13 +535,13 @@ int main(){
       for(int pad=toShow; pad<lastShown; ++pad){ std::cout << "\n" << "\x1b[2K"; }
       int up = toShow + ((lastShown>toShow)? (lastShown-toShow):0);
       if(up>0) std::cout << ansi::CUU << up << "A";
-      int col = status_len + base_prompt_len + (int)buf.size() + 1;
+      int col = status_len + promptDisplayWidth() + displayWidth(buf) + 1;
       std::cout << ansi::CHA << col << "G" << std::flush;
       lastShown = toShow;
     }else{
       for(int i=0;i<lastShown;i++){ std::cout<<"\n"<<"\x1b[2K"; }
       if(lastShown>0){ std::cout<<ansi::CUU<<lastShown<<"A"<<ansi::CHA<<1<<"G"; }
-      int col = status_len + base_prompt_len + (int)buf.size() + 1;
+      int col = status_len + promptDisplayWidth() + displayWidth(buf) + 1;
       std::cout<<ansi::CHA<<col<<"G"<<std::flush;
       lastShown=0; sel=0;
     }
