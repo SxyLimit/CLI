@@ -7,7 +7,23 @@ from pathlib import Path
 from typing import Any, Dict, List
 from prompts import SYSTEM_PROMPT
 
-HISTORY_PATH = Path(os.path.expanduser("mycli_llm_history.json"))
+# Keep history aligned with the C++ watcher (see `resolve_llm_history_path`).
+# Persist history within the shared config directory so the watcher can
+# observe updates and display the `[L]` badge in the prompt.
+
+
+def resolve_config_home() -> Path:
+    candidate = os.getenv("HOME_PATH", "").strip()
+    if not candidate:
+        candidate = "./settings"
+    base = Path(os.path.expanduser(candidate))
+    if not base.is_absolute():
+        base = Path.cwd() / base
+    return base.resolve()
+
+
+CONFIG_HOME = resolve_config_home()
+HISTORY_PATH = CONFIG_HOME / "mycli_llm_history.json"
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 def load_env_file() -> None:

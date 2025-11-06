@@ -159,6 +159,7 @@ struct AppSettings {
   std::string messageWatchFolder = "./message";
   std::string promptName = "mycli";
   std::string promptTheme = "blue";
+  std::string configHome;
 };
 
 extern AppSettings g_settings;
@@ -177,6 +178,8 @@ std::string trFmt(const std::string& key, const std::map<std::string, std::strin
 std::string localized_tool_summary(const ToolSpec& spec);
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value);
 const std::string& settings_file_path();
+const std::string& config_home();
+bool set_config_home(const std::string& path, std::string& error);
 
 // ===== Message watcher =====
 struct MessageFileInfo {

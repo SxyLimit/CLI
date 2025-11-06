@@ -19,6 +19,7 @@
 #include <iostream>
 #include <optional>
 #include <unordered_map>
+#include <filesystem>
 
 #include "globals.hpp"
 #include "tools.hpp"
@@ -30,9 +31,73 @@ CwdMode      g_cwd_mode = CwdMode::Full;
 bool         g_should_exit = false;
 std::string  g_parse_error_cmd;
 
-static const std::string kSettingsPath = "./mycli_settings.json";
+static std::string g_config_home;
+static bool g_config_home_initialized = false;
 
-const std::string& settings_file_path(){ return kSettingsPath; }
+static std::string trim_copy(const std::string& s){
+  size_t a = 0, b = s.size();
+  while(a < b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+  while(b > a && std::isspace(static_cast<unsigned char>(s[b-1]))) --b;
+  return s.substr(a, b - a);
+}
+
+static void load_env_overrides(){
+  static bool loaded = false;
+  if(loaded) return;
+  loaded = true;
+  std::ifstream in(".env");
+  if(!in.good()) return;
+  std::string line;
+  while(std::getline(in, line)){
+    std::string stripped = trim_copy(line);
+    if(stripped.empty() || stripped[0] == '#') continue;
+    auto eq = stripped.find('=');
+    if(eq == std::string::npos) continue;
+    std::string key = trim_copy(stripped.substr(0, eq));
+    std::string value = trim_copy(stripped.substr(eq + 1));
+    if(key.empty()) continue;
+    if(::getenv(key.c_str()) == nullptr){
+      ::setenv(key.c_str(), value.c_str(), 0);
+    }
+  }
+}
+
+static void ensure_config_home_initialized(){
+  if(g_config_home_initialized) return;
+  g_config_home_initialized = true;
+  load_env_overrides();
+  std::string homeOverride;
+  if(const char* env = ::getenv("HOME_PATH"); env && *env){
+    homeOverride = env;
+  }
+  if(homeOverride.empty()){
+    homeOverride = "./settings";
+  }
+  std::filesystem::path p(homeOverride);
+  if(p.is_relative()){
+    p = std::filesystem::absolute(p);
+  }
+  p = p.lexically_normal();
+  std::error_code ec;
+  std::filesystem::create_directories(p, ec);
+  g_config_home = p.string();
+}
+
+const std::string& config_home(){
+  ensure_config_home_initialized();
+  return g_config_home;
+}
+
+static std::string config_file_path(const std::string& name){
+  std::filesystem::path full = std::filesystem::path(config_home()) / name;
+  return std::filesystem::absolute(full).string();
+}
+
+const std::string& settings_file_path(){
+  static std::string path;
+  path = config_file_path("mycli_settings.json");
+  return path;
+}
 
 static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18n = {
   {"show_setting_output", {{"en", "theme = default\nmodel = alpha\n"}, {"zh", "主题 = default\n模型 = alpha\n"}}},
@@ -267,11 +332,7 @@ void register_prompt_badge(const PromptBadge& badge){
 
 static std::string resolve_llm_history_path(){
   if(!g_llm_watcher.path.empty()) return g_llm_watcher.path;
-  const char* home = std::getenv("HOME");
-  if(home && *home){
-    return std::string(home) + "/.mycli_llm_history.json";
-  }
-  return std::string(".mycli_llm_history.json");
+  return config_file_path("mycli_llm_history.json");
 }
 
 void llm_initialize(){
@@ -313,6 +374,99 @@ void llm_mark_seen(){
   if(!g_llm_watcher.initialized) llm_initialize();
   g_llm_watcher.seenMtime = g_llm_watcher.knownMtime;
   g_llm_watcher.seenSize = g_llm_watcher.knownSize;
+}
+
+static void persist_home_path_to_env(const std::string& path){
+  std::ifstream in(".env");
+  std::vector<std::string> lines;
+  bool found = false;
+  if(in.good()){
+    std::string line;
+    while(std::getline(in, line)){
+      std::string stripped = trim_copy(line);
+      auto eq = stripped.find('=');
+      if(stripped.empty() || stripped[0]=='#' || eq==std::string::npos){
+        lines.push_back(line);
+        continue;
+      }
+      std::string key = trim_copy(stripped.substr(0, eq));
+      if(key == "HOME_PATH"){
+        lines.push_back(std::string("HOME_PATH=") + path);
+        found = true;
+      }else{
+        lines.push_back(line);
+      }
+    }
+  }
+  if(!found){
+    lines.push_back(std::string("HOME_PATH=") + path);
+  }
+  std::ofstream out(".env", std::ios::trunc);
+  if(!out.good()) return;
+  for(size_t i=0;i<lines.size();++i){
+    out << lines[i] << "\n";
+  }
+}
+
+bool set_config_home(const std::string& path, std::string& error){
+  std::string trimmed = trim_copy(path);
+  if(trimmed.empty()){
+    error = "invalid_value";
+    return false;
+  }
+  std::filesystem::path p(trimmed);
+  if(p.is_relative()) p = std::filesystem::absolute(p);
+  p = p.lexically_normal();
+  std::error_code ec;
+  std::filesystem::create_directories(p, ec);
+  if(ec){
+    error = "fs_error";
+    return false;
+  }
+  ensure_config_home_initialized();
+  std::filesystem::path oldPath(config_home());
+  std::filesystem::path newPath = p;
+  std::string newPathStr = newPath.string();
+  if(oldPath == newPath){
+    ::setenv("HOME_PATH", newPathStr.c_str(), 1);
+    persist_home_path_to_env(newPathStr);
+    return true;
+  }
+  auto move_file = [&](const std::string& name){
+    std::filesystem::path from = oldPath / name;
+    std::filesystem::path to = newPath / name;
+    if(!std::filesystem::exists(from)) return true;
+    if(std::filesystem::exists(to)) return true;
+    std::error_code moveEc;
+    std::filesystem::create_directories(to.parent_path(), moveEc);
+    moveEc.clear();
+    std::filesystem::rename(from, to, moveEc);
+    if(moveEc){
+      std::ifstream src(from, std::ios::binary);
+      std::ofstream dst(to, std::ios::binary);
+      if(!src.good() || !dst.good()){
+        return false;
+      }
+      dst << src.rdbuf();
+      src.close();
+      dst.close();
+      std::filesystem::remove(from, moveEc);
+    }
+    return true;
+  };
+  if(!move_file("mycli_settings.json") ||
+     !move_file("mycli_tools.conf") ||
+     !move_file("mycli_llm_history.json")){
+    error = "fs_error";
+    return false;
+  }
+  g_config_home = newPathStr;
+  ::setenv("HOME_PATH", newPathStr.c_str(), 1);
+  persist_home_path_to_env(newPathStr);
+  g_llm_watcher.initialized = false;
+  g_llm_watcher.path.clear();
+  llm_initialize();
+  return true;
 }
 
 static size_t utf8CharLength(unsigned char lead){
@@ -1121,7 +1275,7 @@ int main(){
   register_status_providers();
 
   // 2) 从当前目录加载动态工具（如 git/pytool）
-  const std::string conf = "./mycli_tools.conf";
+  const std::string conf = config_file_path("mycli_tools.conf");
   register_tools_from_config(conf);
 
   // 3) 退出时回车复位

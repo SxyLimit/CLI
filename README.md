@@ -17,10 +17,16 @@ g++ -std=c++17 main.cpp -o mycli
 - **路径补全与类型校验**：根据命令占位符或选项定义推断路径类型（文件/目录），补全时自动过滤；当输入不存在或类型不符时，以红色/黄色提示错误原因。
 - **候选提示与 Ghost 文本**：在输入行下方展示至多三个候选项，输入末尾补全不存在时给出上下文提示。
 - **状态栏扩展**：可通过 `StatusProvider` 注册自定义状态（示例中显示当前工作目录）。
-- **外部工具配置**：支持在 `mycli_tools.conf` 中用 INI 语法新增命令及子命令，含互斥选项、动态执行等。
+- **外部工具配置**：支持在配置目录（默认 `./settings/`）下的 `mycli_tools.conf` 中用 INI 语法新增命令及子命令，含互斥选项、动态执行等。
 - **消息提醒**：可监听指定目录（默认当前目录下的 `message/`）中的 `.md` 文件，新建或修改后提示符前会显示红色 `[M]`，通过 `message list/last/detail` 查看。
 - **可定制提示符**：通过设置 `prompt.name` 与 `prompt.theme` 自定义提示符名称及颜色（支持蓝色与蓝紫渐变）。
 - **LLM 接口**：提供 `llm` 命令，调用 `tools/llm.py` 通过 Moonshot(Kimi) 接口（或本地回显模式）完成调用与历史查看。
+
+## 配置目录
+
+- 默认情况下，所有配置文件存放在 `./settings/` 目录中，包括 `mycli_settings.json`、`mycli_tools.conf` 与 `mycli_llm_history.json`。
+- 运行时可通过 `setting set home.path <目录>` 修改配置目录，CLI 会自动迁移已有文件并更新监听路径。
+- 也可以在 `.env` 或系统环境变量中设置 `HOME_PATH=<目录>`，用于在启动前指定配置目录位置。
 
 ## 消息提醒与查看
 
@@ -39,7 +45,7 @@ g++ -std=c++17 main.cpp -o mycli
 
 `llm` 命令由 `tools/llm.py` 实现，提供与大模型的简单交互：
 
-- `llm call <消息>`：异步发送文本到模型并立即返回，问答历史写入 `~/.mycli_llm_history.json`，等待模型返回后提示符前会出现红色 `[L]` 提醒。
+- `llm call <消息>`：异步发送文本到模型并立即返回，问答历史写入配置目录（默认 `./settings/mycli_llm_history.json`），等待模型返回后提示符前会出现红色 `[L]` 提醒。
 - `llm recall`：查看最近一次调用的提示词与回复，同时清除 `[L]` 提醒。
 
 默认使用 Moonshot 的 `kimi-k2-turbo-preview` 模型，并支持通过 `.env` 或环境变量覆盖以下配置：
@@ -58,7 +64,7 @@ g++ -std=c++17 main.cpp -o mycli
 
 ## 在配置文件中接入外部接口
 
-`mycli_tools.conf` 支持以 INI 语法扩展命令。要接入外部 HTTP、Python 或系统级接口，只需新增一个段落并指明执行方式：
+`settings/mycli_tools.conf` 支持以 INI 语法扩展命令。要接入外部 HTTP、Python 或系统级接口，只需新增一个段落并指明执行方式：
 
 ```ini
 [ai.translate]
@@ -91,7 +97,7 @@ positional=<url>
 - `globals.hpp`：公共类型、辅助函数与全局状态声明。
 - `tools.hpp`：路径补全实现、命令/状态注册、动态工具加载。
 - `tools/pytool.py`：示例 Python 工具脚本。
-- `mycli_tools.conf`：外部工具配置示例。
+- `settings/`：默认配置目录，包含 `mycli_settings.json`、`mycli_tools.conf`、`mycli_llm_history.json`。
 
 ## 开发提示
 
