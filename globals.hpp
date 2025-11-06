@@ -5,6 +5,7 @@
 #include <set>
 #include <functional>
 #include <algorithm>
+#include <unordered_map>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -80,13 +81,25 @@ struct SubcommandSpec {
 struct ToolSpec {
   std::string name;
   std::string summary;
+  std::map<std::string, std::string> summaryLocales;
   std::vector<OptionSpec> options;                     // global/options
   std::vector<std::string> positional;                 // command-level positional
   std::vector<SubcommandSpec> subs;                    // subcommands
   std::function<void(const std::vector<std::string>&)> handler;
 };
 
-struct Candidates { std::vector<std::string> items; std::vector<std::string> labels; };
+struct Candidates {
+  std::vector<std::string> items;
+  std::vector<std::string> labels;
+  std::vector<std::vector<int>> matchPositions;
+};
+
+struct MatchResult {
+  bool matched = false;
+  std::vector<int> positions;
+};
+
+MatchResult compute_match(const std::string& candidate, const std::string& pattern);
 
 struct StatusProvider {
   std::string name;
@@ -129,3 +142,31 @@ std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& sub,
 void register_all_tools();
 void register_status_providers();
 void register_tools_from_config(const std::string& path);
+
+// ===== Settings support =====
+enum class MatchMode { Prefix, Subsequence };
+
+struct AppSettings {
+  CwdMode cwdMode = CwdMode::Full;
+  bool completionIgnoreCase = false;
+  bool completionSubsequence = false;
+  std::string language = "en";
+  bool showPathErrorHint = true;
+};
+
+extern AppSettings g_settings;
+
+void load_settings(const std::string& path);
+void save_settings(const std::string& path);
+void apply_settings_to_runtime();
+
+bool settings_get_value(const std::string& key, std::string& value);
+bool settings_set_value(const std::string& key, const std::string& value, std::string& error);
+std::vector<std::string> settings_list_keys();
+
+// ===== Localization =====
+std::string tr(const std::string& key);
+std::string trFmt(const std::string& key, const std::map<std::string, std::string>& values);
+std::string localized_tool_summary(const ToolSpec& spec);
+void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value);
+const std::string& settings_file_path();

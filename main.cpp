@@ -15,15 +15,144 @@
 #include <algorithm>
 #include <iostream>
 #include <optional>
+#include <unordered_map>
 
 #include "globals.hpp"
 #include "tools.hpp"
+#include "settings.hpp"
 
 // ===== Global state definitions =====
 ToolRegistry REG;
 CwdMode      g_cwd_mode = CwdMode::Full;
 bool         g_should_exit = false;
 std::string  g_parse_error_cmd;
+
+static const std::string kSettingsPath = "./mycli_settings.json";
+
+const std::string& settings_file_path(){ return kSettingsPath; }
+
+static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18n = {
+  {"show_setting_output", {{"en", "theme = default\nmodel = alpha\n"}, {"zh", "主题 = default\n模型 = alpha\n"}}},
+  {"show_logs_output",   {{"en", "3 fake log lines...\n2 fake log lines...\n1 fake log line...\n"}, {"zh", "3 行模拟日志...\n2 行模拟日志...\n1 行模拟日志...\n"}}},
+  {"show_usage",         {{"en", "usage: show [setting|logs]"}, {"zh", "用法：show [setting|logs]"}}},
+  {"setting_get_usage",   {{"en", "usage: setting get <key>"}, {"zh", "用法：setting get <key>"}}},
+  {"setting_unknown_key", {{"en", "unknown setting key: {key}"}, {"zh", "未知设置项：{key}"}}},
+  {"setting_get_value",   {{"en", "setting {key} = {value}"}, {"zh", "设置 {key} = {value}"}}},
+  {"setting_set_usage",   {{"en", "usage: setting set <key> <value>"}, {"zh", "用法：setting set <key> <value>"}}},
+  {"setting_invalid_value", {{"en", "invalid value for {key}: {value}"}, {"zh", "设置 {key} 的值无效：{value}"}}},
+  {"setting_set_success", {{"en", "updated {key} -> {value}"}, {"zh", "已更新 {key} -> {value}"}}},
+  {"setting_list_header", {{"en", "Available setting keys:"}, {"zh", "可用设置项："}}},
+  {"setting_usage",       {{"en", "usage: setting <get|set|list>"}, {"zh", "用法：setting <get|set|list>"}}},
+  {"cd_mode_updated",    {{"en", "prompt cwd mode set to {mode}"}, {"zh", "提示符目录模式已设为 {mode}"}}},
+  {"cd_mode_error",      {{"en", "failed to update prompt mode"}, {"zh", "更新提示符模式失败"}}},
+  {"cd_usage",           {{"en", "usage: cd <path> | cd -o [-a|-c]"}, {"zh", "用法：cd <path> | cd -o [-a|-c]"}}},
+  {"mode.full",          {{"en", "full"}, {"zh", "完整"}}},
+  {"mode.omit",          {{"en", "omit"}, {"zh", "仅名称"}}},
+  {"mode.hidden",        {{"en", "hidden"}, {"zh", "隐藏"}}},
+  {"help_available_commands", {{"en", "Available commands:"}, {"zh", "可用命令："}}},
+  {"help_command_summary",   {{"en", "  help  - Show command help"}, {"zh", "  help  - 显示命令帮助"}}},
+  {"help_use_command",       {{"en", "Use: help <command> to see details."}, {"zh", "使用：help <command> 查看详情。"}}},
+  {"help_no_such_command",   {{"en", "No such command: {name}"}, {"zh", "没有名为 {name} 的命令"}}},
+  {"help_subcommands",       {{"en", "  subcommands:"}, {"zh", "  子命令："}}},
+  {"help_options",           {{"en", "  options:"}, {"zh", "  选项："}}},
+  {"help_positional",        {{"en", "  positional: {value}"}, {"zh", "  位置参数：{value}"}}},
+  {"help_required_tag",      {{"en", " (required)"}, {"zh", "（必填）"}}},
+  {"help_path_tag",          {{"en", " (path)"}, {"zh", "（路径）"}}},
+  {"help_usage_line",        {{"en", "usage: {value}"}, {"zh", "用法：{value}"}}},
+  {"unknown_command",        {{"en", "unknown command: {name}"}, {"zh", "未知命令：{name}"}}},
+  {"path_error_missing",     {{"en", "missing"}, {"zh", "不存在"}}},
+  {"path_error_need_dir",    {{"en", "needs directory"}, {"zh", "需要目录"}}},
+  {"path_error_need_file",   {{"en", "needs file"}, {"zh", "需要文件"}}}
+};
+
+void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value){
+  spec.summaryLocales[lang] = value;
+  if(lang=="en" && spec.summary.empty()) spec.summary = value;
+}
+
+std::string localized_tool_summary(const ToolSpec& spec){
+  auto it = spec.summaryLocales.find(g_settings.language);
+  if(it!=spec.summaryLocales.end() && !it->second.empty()) return it->second;
+  auto en = spec.summaryLocales.find("en");
+  if(en!=spec.summaryLocales.end() && !en->second.empty()) return en->second;
+  return spec.summary;
+}
+
+std::string tr(const std::string& key){
+  auto it = g_i18n.find(key);
+  if(it!=g_i18n.end()){
+    auto jt = it->second.find(g_settings.language);
+    if(jt!=it->second.end()) return jt->second;
+    jt = it->second.find("en");
+    if(jt!=it->second.end()) return jt->second;
+  }
+  return key;
+}
+
+std::string trFmt(const std::string& key, const std::map<std::string, std::string>& values){
+  std::string base = tr(key);
+  std::string out;
+  out.reserve(base.size()+32);
+  for(size_t i=0;i<base.size();){
+    if(base[i]=='{' ){
+      size_t end = base.find('}', i+1);
+      if(end!=std::string::npos){
+        std::string var = base.substr(i+1, end-i-1);
+        auto it = values.find(var);
+        if(it!=values.end()) out += it->second;
+        else out += base.substr(i, end-i+1);
+        i = end+1;
+        continue;
+      }
+    }
+    out.push_back(base[i]);
+    ++i;
+  }
+  return out;
+}
+
+MatchResult compute_match(const std::string& candidate, const std::string& pattern){
+  MatchResult res;
+  if(pattern.empty()){
+    res.matched = true;
+    return res;
+  }
+  bool ignoreCase = g_settings.completionIgnoreCase;
+  bool subseq = g_settings.completionSubsequence;
+  if(subseq){
+    size_t p = 0;
+    for(size_t i=0;i<candidate.size() && p<pattern.size();++i){
+      char c = candidate[i];
+      char pc = pattern[p];
+      if(ignoreCase){
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        pc = static_cast<char>(std::tolower(static_cast<unsigned char>(pc)));
+      }
+      if(c==pc){
+        res.positions.push_back(static_cast<int>(i));
+        ++p;
+      }
+    }
+    if(p==pattern.size()){
+      res.matched = true;
+      return res;
+    }
+    res.positions.clear();
+  }
+  if(pattern.size()>candidate.size()) return res;
+  for(size_t i=0;i<pattern.size();++i){
+    char c = candidate[i];
+    char pc = pattern[i];
+    if(ignoreCase){
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      pc = static_cast<char>(std::tolower(static_cast<unsigned char>(pc)));
+    }
+    if(c!=pc) return res;
+    res.positions.push_back(static_cast<int>(i));
+  }
+  res.matched = true;
+  return res;
+}
 
 // ===== Prompt params =====
 static const std::string PLAIN_PROMPT = "mycli> ";
@@ -44,6 +173,36 @@ static int displayWidth(const std::string& text){
     width += w;
   }
   return width;
+}
+
+static std::string renderHighlightedLabel(const std::string& label, const std::vector<int>& positions){
+  std::string out;
+  out.reserve(label.size()*4);
+  size_t idx = 0;
+  int state = 0; // 0 none, 1 white, 2 gray
+  auto flush = [&](int next){
+    if(state==next) return;
+    if(state!=0) out += ansi::RESET;
+    if(next==1) out += ansi::WHITE;
+    else if(next==2) out += ansi::GRAY;
+    state = next;
+  };
+  for(size_t i=0;i<label.size();++i){
+    bool matched = (idx < positions.size() && positions[idx]==static_cast<int>(i));
+    flush(matched?1:2);
+    out.push_back(label[i]);
+    if(matched) ++idx;
+  }
+  if(state!=0) out += ansi::RESET;
+  return out;
+}
+
+static int highlightCursorOffset(const std::string& label, const std::vector<int>& positions){
+  if(positions.empty()) return 0;
+  int last = positions.back();
+  if(last < 0) return 0;
+  std::string prefix = label.substr(0, static_cast<size_t>(last)+1);
+  return displayWidth(prefix);
 }
 
 static int promptDisplayWidth(){
@@ -149,10 +308,11 @@ static Candidates firstWordCandidates(const std::string& buf){
   names.erase(std::unique(names.begin(),names.end()), names.end());
 
   for(auto&s:names){
-    if(startsWith(s, sw.word)){
-      out.items.push_back(sw.before + s);
-      out.labels.push_back(s);
-    }
+    MatchResult match = compute_match(s, sw.word);
+    if(!match.matched) continue;
+    out.items.push_back(sw.before + s);
+    out.labels.push_back(s);
+    out.matchPositions.push_back(match.positions);
   }
   return out;
 }
@@ -164,10 +324,11 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
   // 子命令名补全
   if (inSubcommandSlot(spec, toks)){
     for(auto &sub: spec.subs){
-      if(sw.word.empty() || startsWith(sub.name, sw.word)){
-        out.items.push_back(sw.before + sub.name);
-        out.labels.push_back(sub.name);
-      }
+      MatchResult match = compute_match(sub.name, sw.word);
+      if(!match.matched) continue;
+      out.items.push_back(sw.before + sub.name);
+      out.labels.push_back(sub.name);
+      out.matchPositions.push_back(match.positions);
     }
     if(!out.items.empty()) return out;
   }
@@ -178,6 +339,48 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
     return nullptr;
   };
   const SubcommandSpec* sub=findSub();
+
+  if(spec.name == "setting" && sub){
+    auto positionalIndex = [&]()->std::optional<size_t>{
+      bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
+      size_t start = 2; // command + subcommand
+      size_t count = 0;
+      for(size_t i=start; i<toks.size(); ++i){
+        bool isCurrent = (!trailingSpace && i + 1 == toks.size() && toks[i] == sw.word);
+        if(isCurrent) return count;
+        count++;
+      }
+      if(trailingSpace) return count;
+      return std::nullopt;
+    }();
+
+    if(positionalIndex){
+      size_t idx = *positionalIndex;
+      if((sub->name=="get" || sub->name=="set") && idx==0){
+        auto keys = settings_list_keys();
+        for(const auto& key : keys){
+          MatchResult match = compute_match(key, sw.word);
+          if(!match.matched) continue;
+          out.items.push_back(sw.before + key);
+          out.labels.push_back(key);
+          out.matchPositions.push_back(match.positions);
+        }
+        if(!out.items.empty()) return out;
+      }
+      if(sub->name=="set" && idx==1){
+        std::string keyName = (toks.size()>=3? toks[2] : "");
+        auto values = settings_value_suggestions_for(keyName);
+        for(const auto& val : values){
+          MatchResult match = compute_match(val, sw.word);
+          if(!match.matched) continue;
+          out.items.push_back(sw.before + val);
+          out.labels.push_back(val);
+          out.matchPositions.push_back(match.positions);
+        }
+        if(!out.items.empty()) return out;
+      }
+    }
+  }
 
   // 值补全（包含路径型选项）
   if(toks.size()>=2){
@@ -191,7 +394,13 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
         }
         std::vector<std::string> vals = o.valueSuggestions;
         if(o.dynamicValues){ auto more=o.dynamicValues(toks); vals.insert(vals.end(), more.begin(), more.end()); }
-        for(auto &v: vals) if(startsWith(v, sw.word)){ out.items.push_back(sw.before+v); out.labels.push_back(v); }
+        for(auto &v: vals){
+          MatchResult match = compute_match(v, sw.word);
+          if(!match.matched) continue;
+          out.items.push_back(sw.before+v);
+          out.labels.push_back(v);
+          out.matchPositions.push_back(match.positions);
+        }
         return true;
       } return false;
     };
@@ -224,9 +433,12 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
     for(size_t i=1;i<toks.size();++i) if(startsWith(toks[i],"--")||startsWith(toks[i],"-")) used.insert(toks[i]);
     auto addOpts = [&](const std::vector<OptionSpec>& opts){
       for(auto &o: opts){
-        if(!used.count(o.name) && startsWith(o.name, sw.word)){
+        if(!used.count(o.name)){
+          MatchResult match = compute_match(o.name, sw.word);
+          if(!match.matched) continue;
           out.items.push_back(sw.before + o.name);
           out.labels.push_back(o.name);
+          out.matchPositions.push_back(match.positions);
         }
       }
     };
@@ -254,9 +466,12 @@ static Candidates computeCandidates(const std::string& buf){
       auto names = REG.listNames();
       std::sort(names.begin(), names.end());
       names.erase(std::unique(names.begin(),names.end()), names.end());
-      for (auto &n : names) if (startsWith(n, sw.word)) {
+      for (auto &n : names) {
+        MatchResult match = compute_match(n, sw.word);
+        if(!match.matched) continue;
         out.items.push_back(sw.before + n);
         out.labels.push_back(n);
+        out.matchPositions.push_back(match.positions);
       }
     }
     return out;
@@ -272,6 +487,7 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   auto sw   = splitLastWord(buf);
   if(toks.empty() || sw.word.empty()) return std::nullopt;
   if(!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back()))) return std::nullopt;
+  if(!g_settings.showPathErrorHint) return std::nullopt;
 
   if(toks[0] == "help") return std::nullopt;
   const ToolSpec* spec = REG.find(toks[0]);
@@ -325,22 +541,45 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   struct stat st{};
   if(::stat(sw.word.c_str(), &st)!=0){
     bool hasCand = std::any_of(cand.labels.begin(), cand.labels.end(), [&](const std::string& lab){
-      return startsWith(lab, sw.word);
+      MatchResult match = compute_match(lab, sw.word);
+      return match.matched;
     });
-    if(!hasCand) return std::string("不存在");
+    if(!hasCand) return tr("path_error_missing");
     return std::nullopt;
   }
   bool isDir = S_ISDIR(st.st_mode);
   bool isFile = S_ISREG(st.st_mode);
-  if(expected == PathKind::Dir && !isDir) return std::string("需要目录");
-  if(expected == PathKind::File && !isFile) return std::string("需要文件");
+
+  auto hasMatchingCandidateOfType = [&](PathKind kind){
+    for(const auto& label : cand.labels){
+      MatchResult match = compute_match(label, sw.word);
+      if(!match.matched) continue;
+      bool candIsDir = (!label.empty() && label.back()=='/');
+      if(kind == PathKind::Dir && candIsDir) return true;
+      if(kind == PathKind::File && !candIsDir) return true;
+      if(kind == PathKind::Any) return true;
+    }
+    return false;
+  };
+
+  if(expected == PathKind::Dir && !isDir){
+    if(hasMatchingCandidateOfType(PathKind::Dir)) return std::nullopt;
+    return tr("path_error_need_dir");
+  }
+  if(expected == PathKind::File && !isFile){
+    if(hasMatchingCandidateOfType(PathKind::File)) return std::nullopt;
+    return tr("path_error_need_file");
+  }
   return std::nullopt;
 }
 
 static std::string contextGhostFor(const std::string& buf){
   auto toks=splitTokens(buf); auto sw=splitLastWord(buf);
   if(toks.empty()) return "";
-  if (toks[0] == "help") return " <command>";
+  if (toks[0] == "help"){
+    if(toks.size()==1) return " <command>";
+    return "";
+  }
   const ToolSpec* spec = REG.find(toks[0]); if(!spec) return "";
   if(inSubcommandSlot(*spec, toks)) return " <subcommand>";
   if(!spec->subs.empty() && toks.size()>=2){
@@ -368,35 +607,35 @@ static void renderInputWithGhost(const std::string& status, int status_len,
   std::cout.flush();
 }
 static void renderBelowThree(const std::string& status, int status_len,
+                             int cursorCol,
                              const std::string& buf,
-                             const std::vector<std::string>& labels,
+                             const Candidates& cand,
                              int sel, int &lastShown){
-  int total=(int)labels.size();
+  (void)status;
+  int total=(int)cand.labels.size();
   int toShow = std::min(3, std::max(0, total-1));
   auto sw = splitLastWord(buf);
   int indent = status_len + promptDisplayWidth() + displayWidth(sw.before);
   for(int i=1;i<=toShow;++i){
-    const std::string& label = labels[(sel+i)%total];
-    std::string prefixWord = sw.word;
-    std::string suffix = label;
-    if(suffix.size()>=prefixWord.size() && startsWith(suffix,prefixWord)) suffix = suffix.substr(prefixWord.size());
+    size_t idx = (sel+i)%total;
+    const std::string& label = cand.labels[idx];
+    const std::vector<int>& matches = cand.matchPositions[idx];
+    std::string line = renderHighlightedLabel(label, matches);
     std::cout << "\n" << "\x1b[2K";
     for(int s=0;s<indent;++s) std::cout << ' ';
-    std::cout << ansi::WHITE << prefixWord << ansi::RESET
-              << ansi::GRAY  << suffix << ansi::RESET;
+    std::cout << line;
   }
   for(int pad=toShow; pad<lastShown; ++pad){ std::cout << "\n" << "\x1b[2K"; }
   int up = toShow + ((lastShown>toShow)? (lastShown-toShow):0);
   if(up>0) std::cout << ansi::CUU << up << "A";
-  int col = status_len + promptDisplayWidth() + displayWidth(buf) + 1;
-  std::cout << ansi::CHA << col << "G" << std::flush;
+  std::cout << ansi::CHA << cursorCol << "G" << std::flush;
   lastShown = toShow;
 }
 
 // ===== Exec & help =====
 static void execToolLine(const std::string& line){
   auto toks = splitTokens(line); if(toks.empty()) return;
-  const ToolSpec* spec = REG.find(toks[0]); if(!spec){ std::cout<<"unknown command: "<<toks[0]<<"\n"; return; }
+  const ToolSpec* spec = REG.find(toks[0]); if(!spec){ std::cout<<trFmt("unknown_command", {{"name", toks[0]}})<<"\n"; return; }
   if(!spec->subs.empty() && toks.size()>=2){
     for(auto &sub: spec->subs){ if(sub.name == toks[1]){ if(sub.handler){ sub.handler(toks); return; } } }
   }
@@ -405,22 +644,27 @@ static void execToolLine(const std::string& line){
 }
 static void printHelpAll(){
   auto names = REG.listNames();
-  std::cout<<"Available commands:\n";
-  std::cout<<"  help  - Show command help\n";
+  std::cout<<tr("help_available_commands")<<"\n";
+  std::cout<<tr("help_command_summary")<<"\n";
   for(auto &n:names){
     const ToolSpec* t=REG.find(n);
     std::cout<<"  "<<n;
-    if(t && !t->summary.empty()) std::cout<<"  - "<<t->summary;
+    if(t){
+      std::string summary = localized_tool_summary(*t);
+      if(!summary.empty()) std::cout<<"  - "<<summary;
+    }
     std::cout<<"\n";
   }
-  std::cout<<"Use: help <command> to see details.\n";
+  std::cout<<tr("help_use_command")<<"\n";
 }
 static void printHelpOne(const std::string& name){
   const ToolSpec* t = REG.find(name);
-  if(!t){ std::cout<<"No such command: "<<name<<"\n"; return; }
-  std::cout<<name<<(t->summary.empty()? "":(" - "+t->summary))<<"\n";
+  if(!t){ std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return; }
+  std::string summary = localized_tool_summary(*t);
+  if(summary.empty()) std::cout<<name<<"\n";
+  else std::cout<<name<<" - "<<summary<<"\n";
   if(!t->subs.empty()){
-    std::cout<<"  subcommands:\n";
+    std::cout<<tr("help_subcommands")<<"\n";
     for(auto &s:t->subs){
       std::cout<<"    "<<s.name;
       if(!s.positional.empty()) std::cout<<" "<<join(s.positional);
@@ -430,8 +674,8 @@ static void printHelpOne(const std::string& name){
         for(auto &o:s.options){
           std::cout<<"      "<<o.name;
           if(o.takesValue) std::cout<<" "<<(o.placeholder.empty()? "<val>":o.placeholder);
-          if(o.required)   std::cout<<" (required)";
-          if(o.isPath)     std::cout<<" (path)";
+          if(o.required)   std::cout<<tr("help_required_tag");
+          if(o.isPath)     std::cout<<tr("help_path_tag");
           if(!o.valueSuggestions.empty()){
             std::cout<<"  {"; for(size_t i=0;i<o.valueSuggestions.size();++i){ if(i) std::cout<<","; std::cout<<o.valueSuggestions[i]; } std::cout<<"}";
           }
@@ -441,12 +685,12 @@ static void printHelpOne(const std::string& name){
     }
   }
   if(!t->options.empty()){
-    std::cout<<"  options:\n";
+    std::cout<<tr("help_options")<<"\n";
     for(auto &o:t->options){
       std::cout<<"    "<<o.name;
       if(o.takesValue) std::cout<<" "<<(o.placeholder.empty()? "<val>":o.placeholder);
-      if(o.required)   std::cout<<" (required)";
-      if(o.isPath)     std::cout<<" (path)";
+      if(o.required)   std::cout<<tr("help_required_tag");
+      if(o.isPath)     std::cout<<tr("help_path_tag");
       if(!o.valueSuggestions.empty()){
         std::cout<<"  {"; for(size_t i=0;i<o.valueSuggestions.size();++i){ if(i) std::cout<<","; std::cout<<o.valueSuggestions[i]; } std::cout<<"}";
       }
@@ -454,13 +698,16 @@ static void printHelpOne(const std::string& name){
     }
   }
   if(!t->positional.empty()){
-    std::cout<<"  positional: "<<join(t->positional)<<"\n";
+    std::cout<<trFmt("help_positional", {{"value", join(t->positional)}})<<"\n";
   }
 }
 
 // ===== Main =====
 int main(){
   std::setlocale(LC_CTYPE, "");
+  load_settings(settings_file_path());
+  apply_settings_to_runtime();
+
   // 1) 注册内置工具与状态
   register_all_tools();
   register_status_providers();
@@ -496,13 +743,8 @@ int main(){
     int total = (int)cand.labels.size();
     bool haveCand = total>0;
 
-    std::string ghost="";
-    if(haveCand){
-      if(sel>=total) sel=0;
-      std::string lab=cand.labels[sel], pre=sw.word;
-      if(lab.size()>=pre.size() && startsWith(lab,pre)) ghost=lab.substr(pre.size());
-    }
-    if(ghost.empty()) ghost = contextGhostFor(buf);
+    if(haveCand && sel>=total) sel=0;
+    std::string contextGhost = haveCand? "" : contextGhostFor(buf);
 
     auto pathError = detectPathErrorMessage(buf, cand);
 
@@ -512,37 +754,34 @@ int main(){
               << ansi::WHITE << sw.before << ansi::RESET;
     if(pathError){
       std::cout << ansi::RED << sw.word << ansi::RESET
-                << ansi::YELLOW << "+" << *pathError << ansi::RESET;
+                << "  " << ansi::YELLOW << "+" << *pathError << ansi::RESET;
+    }else if(haveCand){
+      const std::string& label = cand.labels[sel];
+      const std::vector<int>& matches = cand.matchPositions[sel];
+      std::cout << renderHighlightedLabel(label, matches);
     }else{
       std::cout << ansi::WHITE << sw.word << ansi::RESET;
     }
-    std::cout << (ghost.empty()? "" : std::string(ansi::GRAY)+ghost+ansi::RESET);
+    if(!contextGhost.empty()) std::cout << ansi::GRAY << contextGhost << ansi::RESET;
     std::cout.flush();
 
+    int baseIndent = status_len + promptDisplayWidth() + displayWidth(sw.before);
+    int cursorCol = baseIndent;
+    if(pathError){
+      cursorCol += displayWidth(sw.word);
+    }else if(haveCand){
+      cursorCol += highlightCursorOffset(cand.labels[sel], cand.matchPositions[sel]);
+    }else{
+      cursorCol += displayWidth(sw.word);
+    }
+    cursorCol += 1;
+
     if(haveCand){
-      int toShow = std::min(3, std::max(0, total-1));
-      int indent = status_len + promptDisplayWidth() + displayWidth(sw.before);
-      for(int i=1;i<=toShow;++i){
-        const std::string& label = cand.labels[(sel+i)%total];
-        std::string prefixWord = sw.word;
-        std::string suffix = label;
-        if(suffix.size()>=prefixWord.size() && startsWith(suffix,prefixWord)) suffix = suffix.substr(prefixWord.size());
-        std::cout << "\n" << "\x1b[2K";
-        for(int s=0;s<indent;++s) std::cout << ' ';
-        std::cout << ansi::WHITE << prefixWord << ansi::RESET
-                  << ansi::GRAY  << suffix << ansi::RESET;
-      }
-      for(int pad=toShow; pad<lastShown; ++pad){ std::cout << "\n" << "\x1b[2K"; }
-      int up = toShow + ((lastShown>toShow)? (lastShown-toShow):0);
-      if(up>0) std::cout << ansi::CUU << up << "A";
-      int col = status_len + promptDisplayWidth() + displayWidth(buf) + 1;
-      std::cout << ansi::CHA << col << "G" << std::flush;
-      lastShown = toShow;
+      renderBelowThree(status, status_len, cursorCol, buf, cand, sel, lastShown);
     }else{
       for(int i=0;i<lastShown;i++){ std::cout<<"\n"<<"\x1b[2K"; }
       if(lastShown>0){ std::cout<<ansi::CUU<<lastShown<<"A"<<ansi::CHA<<1<<"G"; }
-      int col = status_len + promptDisplayWidth() + displayWidth(buf) + 1;
-      std::cout<<ansi::CHA<<col<<"G"<<std::flush;
+      std::cout<<ansi::CHA<<cursorCol<<"G"<<std::flush;
       lastShown=0; sel=0;
     }
 
