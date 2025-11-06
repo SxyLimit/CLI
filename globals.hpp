@@ -151,6 +151,7 @@ struct AppConfig {
   bool completionIgnoreCase = false;
   bool completionSubsequence = false;
   std::string language = "en";
+  bool showPathErrorHint = true;
 };
 
 extern AppConfig g_config;

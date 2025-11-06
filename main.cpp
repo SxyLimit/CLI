@@ -487,6 +487,7 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   auto sw   = splitLastWord(buf);
   if(toks.empty() || sw.word.empty()) return std::nullopt;
   if(!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back()))) return std::nullopt;
+  if(!g_config.showPathErrorHint) return std::nullopt;
 
   if(toks[0] == "help") return std::nullopt;
   const ToolSpec* spec = REG.find(toks[0]);
@@ -731,7 +732,7 @@ int main(){
               << ansi::WHITE << sw.before << ansi::RESET;
     if(pathError){
       std::cout << ansi::RED << sw.word << ansi::RESET
-                << ansi::YELLOW << "+" << *pathError << ansi::RESET;
+                << "  " << ansi::YELLOW << "+" << *pathError << ansi::RESET;
     }else if(haveCand){
       const std::string& label = cand.labels[sel];
       const std::vector<int>& matches = cand.matchPositions[sel];

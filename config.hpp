@@ -30,6 +30,7 @@ const std::map<std::string, ConfigKeyInfo>& keyInfoMap(){
     {"completion.ignore_case", {ConfigValueKind::Boolean, {"false", "true"}}},
     {"completion.subsequence", {ConfigValueKind::Boolean, {"false", "true"}}},
     {"language", {ConfigValueKind::String, {}}},
+    {"ui.path_error_hint", {ConfigValueKind::Boolean, {"false", "true"}}},
   };
   return infos;
 }
@@ -137,6 +138,8 @@ inline void load_config(const std::string& path){
       bool b; if(parseBool(val,b)) g_config.completionSubsequence = b;
     }else if(key=="language"){
       if(!val.empty()){ g_config.language = val; config_register_language(val); }
+    }else if(key=="ui.path_error_hint"){
+      bool b; if(parseBool(val,b)) g_config.showPathErrorHint = b;
     }
   }
 }
@@ -148,6 +151,7 @@ inline void save_config(const std::string& path){
   out << "completion.ignore_case=" << (g_config.completionIgnoreCase? "true" : "false") << "\n";
   out << "completion.subsequence=" << (g_config.completionSubsequence? "true" : "false") << "\n";
   out << "language=" << g_config.language << "\n";
+  out << "ui.path_error_hint=" << (g_config.showPathErrorHint? "true" : "false") << "\n";
 }
 
 inline void apply_config_to_runtime(){
@@ -166,6 +170,9 @@ inline bool config_get_value(const std::string& key, std::string& value){
   }
   if(key=="language"){
     value = g_config.language; return true;
+  }
+  if(key=="ui.path_error_hint"){
+    value = g_config.showPathErrorHint? "true" : "false"; return true;
   }
   return false;
 }
@@ -206,6 +213,15 @@ inline bool config_set_value(const std::string& key, const std::string& value, s
     }
     g_config.language = value;
     config_register_language(value);
+    return true;
+  }
+  if(key=="ui.path_error_hint"){
+    bool b;
+    if(!parseBool(value, b)){
+      error = "invalid_value";
+      return false;
+    }
+    g_config.showPathErrorHint = b;
     return true;
   }
   error = "unknown_key";

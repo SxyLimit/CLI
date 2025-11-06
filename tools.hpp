@@ -253,7 +253,7 @@ inline ToolSpec make_ls(){
   set_tool_summary_locale(t, "en", "List directory (simple)");
   set_tool_summary_locale(t, "zh", "列出目录（简化版）");
   t.options={{"-a",false,{},nullptr,false,"",false},{"-l",false,{},nullptr,false,"",false}};
-  t.positional={"[<path>]"}; // 若作为位置参，也会自动路径补全
+  t.positional={"[<dir>]"}; // 若作为位置参，也会自动路径补全
   t.handler=[](const std::vector<std::string>& a){
     bool showDot=false; bool longFmt=false; std::string path=".";
     for(size_t i=1;i<a.size();++i){
