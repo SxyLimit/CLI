@@ -1601,7 +1601,9 @@ bool todoWizardSubmit(const std::string& value){
     std::string createErr;
     if(!ToDoManager::instance().createTask(state.options, createErr)){
       if(!createErr.empty()) std::cout<<ansi::RED<<createErr<<ansi::RESET<<"\n";
-      return false;
+      std::cout<<ansi::YELLOW<<"创建未完成，向导已退出"<<ansi::RESET<<"\n";
+      state = TodoCreateWizardState{};
+      return true;
     }
     std::cout<<ansi::CYAN<<"已创建任务 "<<state.options.name<<ansi::RESET<<"\n";
     state = TodoCreateWizardState{};
@@ -2117,6 +2119,19 @@ static std::vector<std::string> sampleTimeValues(){
   return values;
 }
 
+static bool timePrefixMatch(const std::string& candidate, const std::string& pattern, std::vector<int>& positions){
+  positions.clear();
+  if(pattern.empty()) return true;
+  if(pattern.size() > candidate.size()) return false;
+  for(size_t i=0;i<pattern.size();++i){
+    unsigned char c = static_cast<unsigned char>(candidate[i]);
+    unsigned char p = static_cast<unsigned char>(pattern[i]);
+    if(std::tolower(c) != std::tolower(p)) return false;
+    positions.push_back(static_cast<int>(i));
+  }
+  return true;
+}
+
 static Candidates timeCandidates(const std::string& buf){
   Candidates cand;
   auto sw = splitLastWord(buf);
@@ -2142,11 +2157,9 @@ static Candidates timeCandidates(const std::string& buf){
 
   auto appendList = [&](const std::vector<std::string>& list){
     for(const auto& item : list){
-      MatchResult m = compute_match(item, sw.word);
-      if(!sw.word.empty() && !m.matched) continue;
-      if(sw.word.empty() && !m.matched) m.matched = true;
-      if(!m.matched) continue;
-      addCandidate(item, item, m.positions);
+      std::vector<int> positions;
+      if(!timePrefixMatch(item, sw.word, positions)) continue;
+      addCandidate(item, item, positions);
     }
   };
 
