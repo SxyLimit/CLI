@@ -169,5 +169,12 @@ std::string todoContextGhost(const ToolSpec& spec, const std::vector<std::string
 
 extern const std::vector<std::string> kUrgencyLevels;
 
+bool todoWizardActive();
+std::string todoWizardPrefix();
+Candidates todoWizardCandidates(const std::string& value);
+std::string todoWizardGhost();
+std::optional<std::string> todoWizardPrefill();
+bool todoWizardSubmit(const std::string& value);
+
 #include "todo_impl.hpp"
 

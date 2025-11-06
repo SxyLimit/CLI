@@ -1225,7 +1225,406 @@ static void printTasksList(const std::vector<ToDoTask>& tasks){
   }
 }
 
+static Candidates timeCandidates(const std::string& buf);
+static Candidates listToCandidates(const std::vector<std::string>& list, const std::string& buf);
+static std::vector<std::string> periodSuggestionList();
+
+static std::vector<std::string> splitListItems(const std::string& text){
+  std::string cleaned;
+  cleaned.reserve(text.size());
+  for(char c : text){
+    if(c==',' || c==';' || c=='\n' || c=='\t') cleaned.push_back(' ');
+    else cleaned.push_back(c);
+  }
+  return splitTokens(cleaned);
+}
+
+struct TodoCreateWizardField {
+  std::string label;
+  bool optional = false;
+  std::function<Candidates(const std::string&)> complete;
+  std::function<std::string()> ghost;
+  std::function<std::string()> prefill;
+  std::function<bool(const std::string&, TaskCreationOptions&, std::string&)> apply;
+};
+
+struct TodoCreateWizardState {
+  bool active = false;
+  std::vector<TodoCreateWizardField> fields;
+  size_t index = 0;
+  TaskCreationOptions options;
+  std::optional<std::string> pendingPrefill;
+};
+
+static TodoCreateWizardState& wizardState(){
+  static TodoCreateWizardState state;
+  return state;
+}
+
+static Candidates noCandidates(const std::string&){ return Candidates{}; }
+
+bool todoWizardActive(){
+  return wizardState().active;
+}
+
+std::string todoWizardPrefix(){
+  auto& state = wizardState();
+  if(!state.active || state.index>=state.fields.size()) return std::string();
+  return state.fields[state.index].label + ": ";
+}
+
+Candidates todoWizardCandidates(const std::string& value){
+  auto& state = wizardState();
+  if(!state.active || state.index>=state.fields.size()) return Candidates{};
+  auto& field = state.fields[state.index];
+  if(field.complete) return field.complete(value);
+  return Candidates{};
+}
+
+std::string todoWizardGhost(){
+  auto& state = wizardState();
+  if(!state.active || state.index>=state.fields.size()) return std::string();
+  auto& field = state.fields[state.index];
+  std::string base;
+  if(field.ghost) base = field.ghost();
+  if(field.optional){
+    if(!base.empty()) base += " ";
+    base += "留空跳过";
+  }
+  if(base.empty()) return std::string();
+  return " " + base;
+}
+
+std::optional<std::string> todoWizardPrefill(){
+  auto& state = wizardState();
+  if(!state.active) return std::nullopt;
+  if(!state.pendingPrefill) return std::nullopt;
+  auto value = state.pendingPrefill;
+  state.pendingPrefill.reset();
+  return value;
+}
+
+static Candidates completeFromList(const std::vector<std::string>& list, const std::string& value){
+  return listToCandidates(list, value);
+}
+
+static bool applyNameField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::string trimmed = todo_detail::trim(value);
+  if(trimmed.empty()){
+    err = "任务名称不能为空";
+    return false;
+  }
+  if(!todo_detail::isValidName(trimmed)){
+    err = "任务名只能包含字母、数字和下划线";
+    return false;
+  }
+  if(ToDoManager::instance().findTask(trimmed, true)){
+    err = "任务已存在";
+    return false;
+  }
+  opts.name = trimmed;
+  return true;
+}
+
+static bool applyTodoField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::vector<std::string> parts = todo_detail::splitBy(value, ';');
+  std::vector<std::string> entries;
+  for(auto &p : parts){
+    std::string trimmed = todo_detail::trim(p);
+    if(!trimmed.empty()) entries.push_back(trimmed);
+  }
+  if(entries.empty()){
+    err = "ToDo 内容不能为空";
+    return false;
+  }
+  opts.addEntries = entries;
+  return true;
+}
+
+static bool applyStartField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::string trimmed = todo_detail::trim(value);
+  if(trimmed.empty()){ opts.startInput.reset(); return true; }
+  auto parsed = ToDoManager::instance().parseTimeValue(trimmed, false);
+  if(!parsed.ok){ err = parsed.error.empty()? kTimeFormatHelp : parsed.error; return false; }
+  opts.startInput = trimmed;
+  return true;
+}
+
+static bool applyDeadlineField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::string trimmed = todo_detail::trim(value);
+  if(trimmed.empty()){ opts.deadlineInput.reset(); return true; }
+  auto parsed = ToDoManager::instance().parseTimeValue(trimmed, true);
+  if(!parsed.ok){ err = parsed.error.empty()? kTimeFormatHelp : parsed.error; return false; }
+  opts.deadlineInput = trimmed;
+  return true;
+}
+
+static bool applyTagField(const std::string& value, TaskCreationOptions& opts, std::string&){
+  std::vector<std::string> items = splitListItems(value);
+  opts.categories = items;
+  return true;
+}
+
+static bool applyUrgencyField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::string trimmed = todo_detail::trim(value);
+  if(trimmed.empty()){ opts.urgency.clear(); return true; }
+  auto lower = todo_detail::lowercase(trimmed);
+  auto it = std::find_if(kUrgencyLevels.begin(), kUrgencyLevels.end(), [&](const std::string& v){ return todo_detail::lowercase(v)==lower; });
+  if(it==kUrgencyLevels.end()){
+    err = "紧急程度必须为 " + ToDoManager::joinList(kUrgencyLevels);
+    return false;
+  }
+  opts.urgency = trimmed;
+  return true;
+}
+
+static bool applyProgressPercentField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::string trimmed = todo_detail::trim(value);
+  if(trimmed.empty()){ opts.progressPercent.reset(); return true; }
+  double v;
+  if(!parseDouble(trimmed, v)){
+    err = "百分比格式错误";
+    return false;
+  }
+  if(v<0 || v>100){ err = "百分比应在0-100"; return false; }
+  opts.progressPercent = v;
+  return true;
+}
+
+static bool applyProgressStepField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::string trimmed = todo_detail::trim(value);
+  if(trimmed.empty()){ opts.progressStep.reset(); return true; }
+  int v;
+  if(!parseInt(trimmed, v)){
+    err = "步数格式错误";
+    return false;
+  }
+  if(v<0){ err = "步数应为非负"; return false; }
+  opts.progressStep = v;
+  return true;
+}
+
+static bool applyPeriodField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::string trimmed = todo_detail::trim(value);
+  if(trimmed.empty()){ opts.periodInput.reset(); return true; }
+  std::string norm;
+  if(todo_detail::parsePeriod(trimmed, norm).count()==0){
+    err = "周期格式错误：示例 per d、per 2w、per m";
+    return false;
+  }
+  opts.periodInput = trimmed;
+  return true;
+}
+
+static bool applyTemplateField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::vector<std::string> items = splitListItems(value);
+  auto names = ToDoManager::instance().templateNames();
+  for(auto &name : items){
+    if(std::find(names.begin(), names.end(), name)==names.end()){
+      err = "模板不存在: " + name;
+      return false;
+    }
+  }
+  opts.templates = items;
+  return true;
+}
+
+static bool applySubtaskField(const std::string& value, TaskCreationOptions& opts, std::string&){
+  std::vector<std::string> items = splitListItems(value);
+  std::vector<ToDoSubtask> subs;
+  for(auto &name : items){
+    ToDoSubtask st; st.name = name; subs.push_back(st);
+  }
+  opts.subtasks = subs;
+  return true;
+}
+
+static bool ensureTasksExist(const std::vector<std::string>& names, std::string& err){
+  for(auto &name : names){
+    if(!ToDoManager::instance().findTask(name, true)){
+      err = "任务不存在: " + name;
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool applyPreField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::vector<std::string> items = splitListItems(value);
+  if(!ensureTasksExist(items, err)) return false;
+  opts.predecessors = items;
+  return true;
+}
+
+static bool applyPostField(const std::string& value, TaskCreationOptions& opts, std::string& err){
+  std::vector<std::string> items = splitListItems(value);
+  if(!ensureTasksExist(items, err)) return false;
+  opts.successors = items;
+  return true;
+}
+
+static std::vector<std::string> cachedTemplateNames(){
+  return ToDoManager::instance().templateNames();
+}
+
+static std::vector<std::string> cachedCategories(){
+  std::vector<std::string> cats(ToDoManager::instance().categorySet().begin(), ToDoManager::instance().categorySet().end());
+  return cats;
+}
+
+static std::vector<std::string> cachedTaskNames(){
+  return ToDoManager::instance().taskNames(true);
+}
+
+static std::string currentTimePrefill(){
+  return todo_detail::nowString();
+}
+
+static void startCreateWizard(){
+  ToDoManager& mgr = ToDoManager::instance();
+  if(!mgr.ready()){
+    std::cout<<ansi::RED<<"请先使用 Setup 设置目录"<<ansi::RESET<<"\n";
+    return;
+  }
+  auto& state = wizardState();
+  state = TodoCreateWizardState{};
+  state.active = true;
+  state.fields = {
+    TodoCreateWizardField{
+      "Name", false, noCandidates,
+      [](){ return std::string("任务名需为字母/数字/下划线"); },
+      [](){ return std::string(); },
+      applyNameField
+    },
+    TodoCreateWizardField{
+      "ToDo", false, noCandidates,
+      [](){ return std::string("支持用 ';' 分隔多条记录"); },
+      [](){ return std::string(); },
+      applyTodoField
+    },
+    TodoCreateWizardField{
+      "StartTime", true,
+      timeCandidates,
+      [](){ return std::string("绝对时间或 +1d/+2h 等"); },
+      currentTimePrefill,
+      applyStartField
+    },
+    TodoCreateWizardField{
+      "Deadline", true,
+      timeCandidates,
+      [](){ return std::string("绝对时间或 +1d/+2h 等"); },
+      [](){ return std::string(); },
+      applyDeadlineField
+    },
+    TodoCreateWizardField{
+      "Tag", true,
+      [](const std::string& value){ return completeFromList(cachedCategories(), value); },
+      [](){ return std::string("可输入多个标签"); },
+      [](){ return std::string(); },
+      applyTagField
+    },
+    TodoCreateWizardField{
+      "Urgency", true,
+      [](const std::string& value){ return completeFromList(kUrgencyLevels, value); },
+      [](){ return std::string("可选 none/low/normal/high/critical"); },
+      [](){ return std::string(); },
+      applyUrgencyField
+    },
+    TodoCreateWizardField{
+      "ProgressPercent", true,
+      noCandidates,
+      [](){ return std::string("输入 0-100 的数字"); },
+      [](){ return std::string(); },
+      applyProgressPercentField
+    },
+    TodoCreateWizardField{
+      "ProgressStep", true,
+      noCandidates,
+      [](){ return std::string("输入非负整数"); },
+      [](){ return std::string(); },
+      applyProgressStepField
+    },
+    TodoCreateWizardField{
+      "Per", true,
+      [](const std::string& value){ return completeFromList(periodSuggestionList(), value); },
+      [](){ return std::string("示例 per d/per 2w"); },
+      [](){ return std::string(); },
+      applyPeriodField
+    },
+    TodoCreateWizardField{
+      "Template", true,
+      [](const std::string& value){ return completeFromList(cachedTemplateNames(), value); },
+      [](){ return std::string("可选择已有模板"); },
+      [](){ return std::string(); },
+      applyTemplateField
+    },
+    TodoCreateWizardField{
+      "Subtask", true,
+      noCandidates,
+      [](){ return std::string("使用空格或 ',' 分隔多个子任务"); },
+      [](){ return std::string(); },
+      applySubtaskField
+    },
+    TodoCreateWizardField{
+      "Pre", true,
+      [](const std::string& value){ return completeFromList(cachedTaskNames(), value); },
+      [](){ return std::string("设置前驱任务"); },
+      [](){ return std::string(); },
+      applyPreField
+    },
+    TodoCreateWizardField{
+      "Post", true,
+      [](const std::string& value){ return completeFromList(cachedTaskNames(), value); },
+      [](){ return std::string("设置后继任务"); },
+      [](){ return std::string(); },
+      applyPostField
+    }
+  };
+  if(!state.fields.empty() && state.fields[0].prefill){
+    state.pendingPrefill = state.fields[0].prefill();
+  }
+  std::cout<<ansi::CYAN<<"进入任务创建向导，按回车确认，留空可跳过可选项"<<ansi::RESET<<"\n";
+}
+
+bool todoWizardSubmit(const std::string& value){
+  auto& state = wizardState();
+  if(!state.active || state.index>=state.fields.size()) return false;
+  auto& field = state.fields[state.index];
+  std::string err;
+  std::string trimmed = todo_detail::trim(value);
+  if(field.apply && !field.apply(trimmed, state.options, err)){
+    if(!err.empty()) std::cout<<ansi::RED<<err<<ansi::RESET<<"\n";
+    return false;
+  }
+  size_t next = state.index + 1;
+  if(next >= state.fields.size()){
+    std::string createErr;
+    if(!ToDoManager::instance().createTask(state.options, createErr)){
+      if(!createErr.empty()) std::cout<<ansi::RED<<createErr<<ansi::RESET<<"\n";
+      return false;
+    }
+    std::cout<<ansi::CYAN<<"已创建任务 "<<state.options.name<<ansi::RESET<<"\n";
+    state = TodoCreateWizardState{};
+    return true;
+  }
+  state.index = next;
+  state.pendingPrefill.reset();
+  if(state.fields[state.index].prefill){
+    state.pendingPrefill = state.fields[state.index].prefill();
+  }
+  return true;
+}
+
 static void handleCreat(const std::vector<std::string>& toks){
+  ToDoManager& mgr = ToDoManager::instance();
+  if(!mgr.ready()){
+    std::cout<<ansi::RED<<"请先使用 Setup 设置目录"<<ansi::RESET<<"\n";
+    return;
+  }
+  if(toks.size()==2){
+    startCreateWizard();
+    return;
+  }
   if(toks.size()<3){
     std::cout<<ansi::RED<<"缺少任务名称"<<ansi::RESET<<"\n";
     return;
@@ -1293,12 +1692,13 @@ static void handleCreat(const std::vector<std::string>& toks){
     }
   }
   std::string err;
-  if(!ToDoManager::instance().createTask(opts, err)){
+  if(!mgr.createTask(opts, err)){
     std::cout<<ansi::RED<<err<<ansi::RESET<<"\n";
     return;
   }
   std::cout<<ansi::CYAN<<"已创建任务 "<<opts.name<<ansi::RESET<<"\n";
 }
+
 
 static void handleUpdata(const std::vector<std::string>& toks){
   if(toks.size()<3){ std::cout<<ansi::RED<<"缺少任务名称"<<ansi::RESET<<"\n"; return; }
@@ -1782,6 +2182,11 @@ Candidates todoCandidates(const ToolSpec& spec, const std::string& buf){
     for(auto &s : spec.subs) subs.push_back(s.name);
     return listToCandidates(subs, buf);
   }
+  if(toks.size()==2 && toks.back()==sw.word){
+    std::vector<std::string> subs;
+    for(auto &s : spec.subs) subs.push_back(s.name);
+    return listToCandidates(subs, buf);
+  }
   const std::string& cmd = toks[1];
   ToDoManager& mgr = ToDoManager::instance();
   if(tokenEquals(cmd, "Creat")){
@@ -1994,7 +2399,7 @@ std::string todoContextGhost(const ToolSpec& spec, const std::vector<std::string
   if(toks.size()==1) return " <subcommand>";
   const std::string& cmd = toks[1];
   if(cmd=="Creat"){
-    if(toks.size()==2) return " <name>";
+    if(toks.size()==2) return " 回车进入向导";
     return " [Add <todo>] [StartTime <time>] [Deadline <time>] ...";
   }
   if(cmd=="Updata"){
