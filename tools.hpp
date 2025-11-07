@@ -45,16 +45,24 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
     std::sort(positions.begin(), positions.end());
     out.matchPositions.push_back(std::move(positions));
     out.annotations.push_back(dirAsHint? "[dir]" : "");
+    out.exactMatches.push_back(match.exact);
   }
   ::closedir(d);
   std::vector<size_t> idx(out.labels.size()); for(size_t i=0;i<idx.size();++i) idx[i]=i;
-  std::sort(idx.begin(),idx.end(),[&](size_t a,size_t b){ return out.labels[a] < out.labels[b]; });
+  std::sort(idx.begin(),idx.end(),[&](size_t a,size_t b){
+    bool ea = (a < out.exactMatches.size()) ? out.exactMatches[a] : false;
+    bool eb = (b < out.exactMatches.size()) ? out.exactMatches[b] : false;
+    if(ea != eb) return ea > eb;
+    return out.labels[a] < out.labels[b];
+  });
   Candidates s; s.items.reserve(idx.size()); s.labels.reserve(idx.size()); s.annotations.reserve(idx.size());
   for(size_t k: idx){
     s.items.push_back(out.items[k]);
     s.labels.push_back(out.labels[k]);
     s.matchPositions.push_back(out.matchPositions[k]);
     s.annotations.push_back(out.annotations[k]);
+    if(k < out.exactMatches.size()) s.exactMatches.push_back(out.exactMatches[k]);
+    else s.exactMatches.push_back(false);
   }
   return s;
 }

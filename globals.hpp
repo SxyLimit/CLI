@@ -96,10 +96,12 @@ struct Candidates {
   std::vector<std::string> labels;
   std::vector<std::vector<int>> matchPositions;
   std::vector<std::string> annotations;
+  std::vector<bool> exactMatches;
 };
 
 struct MatchResult {
   bool matched = false;
+  bool exact = false;
   std::vector<int> positions;
 };
 
