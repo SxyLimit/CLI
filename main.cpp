@@ -64,12 +64,29 @@ public:
 };
 
 inline void ensure_virtual_terminal_output(){
-  HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-  if(hOut == INVALID_HANDLE_VALUE) return;
-  DWORD mode = 0;
-  if(!GetConsoleMode(hOut, &mode)) return;
-  mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-  SetConsoleMode(hOut, mode);
+  static bool initialized = false;
+  if(initialized) return;
+  initialized = true;
+
+  // Ensure the console understands UTF-8 sequences.
+  SetConsoleOutputCP(CP_UTF8);
+  SetConsoleCP(CP_UTF8);
+  _setmode(_fileno(stdout), _O_BINARY);
+  _setmode(_fileno(stderr), _O_BINARY);
+  _setmode(_fileno(stdin), _O_BINARY);
+
+  auto enable_virtual_terminal = [](DWORD stdHandle){
+    HANDLE handle = GetStdHandle(stdHandle);
+    if(handle == INVALID_HANDLE_VALUE) return;
+    DWORD mode = 0;
+    if(!GetConsoleMode(handle, &mode)) return;
+    mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    mode |= DISABLE_NEWLINE_AUTO_RETURN;
+    SetConsoleMode(handle, mode);
+  };
+
+  enable_virtual_terminal(STD_OUTPUT_HANDLE);
+  enable_virtual_terminal(STD_ERROR_HANDLE);
 }
 
 inline int wait_for_input(int timeout_ms){
