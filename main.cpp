@@ -20,6 +20,8 @@
 #include <optional>
 #include <unordered_map>
 #include <filesystem>
+#include <numeric>
+#include <type_traits>
 
 #include "globals.hpp"
 #include "tools.hpp"
@@ -571,19 +573,40 @@ MatchResult compute_match(const std::string& candidate, const std::string& patte
   MatchResult res;
   if(pattern.empty()){
     res.matched = true;
+    res.exact = candidate.empty();
     return res;
   }
   bool ignoreCase = g_settings.completionIgnoreCase;
   bool subseq = g_settings.completionSubsequence;
+  auto normalize = [&](char ch){
+    return ignoreCase ? static_cast<char>(std::tolower(static_cast<unsigned char>(ch)))
+                      : ch;
+  };
+
+  if(candidate.size() == pattern.size()){
+    bool same = true;
+    res.positions.reserve(candidate.size());
+    for(size_t i=0;i<candidate.size();++i){
+      char c = normalize(candidate[i]);
+      char pc = normalize(pattern[i]);
+      if(c != pc){
+        same = false;
+        break;
+      }
+      res.positions.push_back(static_cast<int>(i));
+    }
+    if(same){
+      res.matched = true;
+      res.exact = true;
+      return res;
+    }
+    res.positions.clear();
+  }
   if(subseq){
     size_t p = 0;
     for(size_t i=0;i<candidate.size() && p<pattern.size();++i){
-      char c = candidate[i];
-      char pc = pattern[p];
-      if(ignoreCase){
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        pc = static_cast<char>(std::tolower(static_cast<unsigned char>(pc)));
-      }
+      char c = normalize(candidate[i]);
+      char pc = normalize(pattern[p]);
       if(c==pc){
         res.positions.push_back(static_cast<int>(i));
         ++p;
@@ -597,12 +620,8 @@ MatchResult compute_match(const std::string& candidate, const std::string& patte
   }
   if(pattern.size()>candidate.size()) return res;
   for(size_t i=0;i<pattern.size();++i){
-    char c = candidate[i];
-    char pc = pattern[i];
-    if(ignoreCase){
-      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      pc = static_cast<char>(std::tolower(static_cast<unsigned char>(pc)));
-    }
+    char c = normalize(candidate[i]);
+    char pc = normalize(pattern[i]);
     if(c!=pc) return res;
     res.positions.push_back(static_cast<int>(i));
   }
@@ -791,6 +810,7 @@ static Candidates firstWordCandidates(const std::string& buf){
     out.labels.push_back(s);
     out.matchPositions.push_back(match.positions);
     out.annotations.push_back("");
+    out.exactMatches.push_back(match.exact);
   }
   return out;
 }
@@ -808,6 +828,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       out.labels.push_back(sub.name);
       out.matchPositions.push_back(match.positions);
       out.annotations.push_back("");
+      out.exactMatches.push_back(match.exact);
     }
     if(!out.items.empty()) return out;
   }
@@ -844,6 +865,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.labels.push_back(key);
           out.matchPositions.push_back(match.positions);
           out.annotations.push_back("");
+          out.exactMatches.push_back(match.exact);
         }
         if(!out.items.empty()) return out;
       }
@@ -857,6 +879,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.labels.push_back(val);
           out.matchPositions.push_back(match.positions);
           out.annotations.push_back("");
+          out.exactMatches.push_back(match.exact);
         }
         if(!out.items.empty()) return out;
       }
@@ -886,6 +909,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           annotation = info.isNew? "[NEW]" : "[UPDATED]";
         }
         out.annotations.push_back(annotation);
+        out.exactMatches.push_back(match.exact);
       }
       if(!out.items.empty()) return out;
     }
@@ -910,6 +934,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.labels.push_back(v);
           out.matchPositions.push_back(match.positions);
           out.annotations.push_back("");
+          out.exactMatches.push_back(match.exact);
         }
         return true;
       } return false;
@@ -950,6 +975,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.labels.push_back(o.name);
           out.matchPositions.push_back(match.positions);
           out.annotations.push_back("");
+          out.exactMatches.push_back(match.exact);
         }
       }
     };
@@ -964,6 +990,39 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
   }
 
   return out;
+}
+
+static void prioritizeExactMatches(Candidates& cand){
+  if(cand.labels.empty()) return;
+  if(cand.exactMatches.size() < cand.labels.size()){
+    cand.exactMatches.resize(cand.labels.size(), false);
+  }
+  bool hasExact = std::any_of(cand.exactMatches.begin(), cand.exactMatches.end(), [](bool v){ return v; });
+  if(!hasExact) return;
+  std::vector<size_t> order(cand.labels.size());
+  std::iota(order.begin(), order.end(), size_t{0});
+  std::stable_partition(order.begin(), order.end(), [&](size_t idx){
+    return cand.exactMatches[idx];
+  });
+  bool changed = false;
+  for(size_t i=0;i<order.size();++i){
+    if(order[i] != i){ changed = true; break; }
+  }
+  if(!changed) return;
+  auto reorderVec = [&](auto& vec){
+    using VecType = std::decay_t<decltype(vec)>;
+    VecType reordered;
+    reordered.reserve(vec.size());
+    for(size_t idx : order){
+      reordered.push_back(vec[idx]);
+    }
+    vec = std::move(reordered);
+  };
+  reorderVec(cand.items);
+  reorderVec(cand.labels);
+  reorderVec(cand.matchPositions);
+  reorderVec(cand.annotations);
+  reorderVec(cand.exactMatches);
 }
 
 static Candidates computeCandidates(const std::string& buf){
@@ -984,6 +1043,7 @@ static Candidates computeCandidates(const std::string& buf){
         out.labels.push_back(n);
         out.matchPositions.push_back(match.positions);
         out.annotations.push_back("");
+        out.exactMatches.push_back(match.exact);
       }
     }
     return out;
@@ -1316,6 +1376,7 @@ int main(){
     int status_len = displayWidth(status);
 
     cand = computeCandidates(buf);
+    prioritizeExactMatches(cand);
     sw = splitLastWord(buf);
     total = static_cast<int>(cand.labels.size());
     haveCand = total > 0;
