@@ -11,24 +11,53 @@
 // ===== Path candidates (inline) =====
 inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind){
   Candidates out;
-  std::string dir, base;
-  if (!word.empty() && word.back()=='/'){ dir=word; base=""; }
-  else { size_t p = word.find_last_of('/'); if(p==std::string::npos){ dir=""; base=word; } else { dir=word.substr(0,p+1); base=word.substr(p+1); } }
-  std::string root = dir.empty()? std::string("./") : dir;
-  DIR* d = ::opendir(root.c_str()); if(!d) return out;
+
+  auto isSep = [](char ch){ return ch == '/' || ch == '\\'; };
+
+  std::string dir;
+  std::string base;
+  if(!word.empty() && isSep(word.back())){
+    dir = word;
+    base.clear();
+  }else{
+    size_t p = word.find_last_of("/\\");
+    if(p == std::string::npos){
+      base = word;
+    }else{
+      dir = word.substr(0, p + 1);
+      base = word.substr(p + 1);
+    }
+  }
+
+  std::filesystem::path rootPath = dir.empty() ? std::filesystem::path(".") : std::filesystem::path(dir);
+  std::error_code ec;
+  std::filesystem::directory_iterator it(rootPath, ec);
+  if(ec) return out;
+
   auto sw = splitLastWord(fullBuf);
-  for(dirent* e = ::readdir(d); e; e = ::readdir(d)){
-    std::string name = e->d_name; if(name=="."||name=="..") continue;
+  auto pickSep = [&](char fallback){
+    if(!dir.empty() && isSep(dir.back())) return dir.back();
+    for(char ch : dir){
+      if(isSep(ch)) return ch;
+    }
+    return fallback;
+  };
+  char preferredSep = pickSep(std::filesystem::path::preferred_separator);
+
+  for(const auto& entry : it){
+    std::string name = entry.path().filename().string();
+    if(name == "." || name == "..") continue;
+
     MatchResult match = compute_match(name, base);
     if(!base.empty() && !match.matched) continue;
     if(base.empty() && !match.matched) match.matched = true;
-    std::string cand = dir + name;
-    struct stat st{}; std::string pth = root + (root.back()=='/'? "" : "/") + name;
-    bool isDir=false, isFile=false;
-    if(::stat(pth.c_str(), &st)==0){
-      isDir = S_ISDIR(st.st_mode);
-      isFile = S_ISREG(st.st_mode);
-    }
+
+    std::error_code statusEc;
+    bool isDir = entry.is_directory(statusEc);
+    if(statusEc){ statusEc.clear(); isDir = false; }
+    bool isFile = entry.is_regular_file(statusEc);
+    if(statusEc){ statusEc.clear(); isFile = false; }
+
     bool include = false;
     bool dirAsHint = false;
     if(kind == PathKind::Any){
@@ -36,33 +65,46 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
     }else if(kind == PathKind::Dir){
       include = isDir;
     }else if(kind == PathKind::File){
-      if(isFile) include = true;
-      else if(isDir){ include = true; dirAsHint = true; }
+      if(isFile){
+        include = true;
+      }else if(isDir){
+        include = true;
+        dirAsHint = true;
+      }
     }
     if(!include) continue;
-    if(isDir) cand += "/";
+
+    std::string cand = dir + name;
+    if(isDir){
+      if(cand.empty() || !isSep(cand.back())) cand.push_back(preferredSep);
+    }
+
     std::vector<int> positions;
     for(size_t i=0;i<dir.size();++i) positions.push_back(static_cast<int>(i));
     for(int pos : match.positions) positions.push_back(static_cast<int>(dir.size() + pos));
-    if(isDir){ /* no change */ }
+    std::sort(positions.begin(), positions.end());
+
     out.items.push_back(sw.before + cand);
     out.labels.push_back(cand);
-    std::sort(positions.begin(), positions.end());
     out.matchPositions.push_back(std::move(positions));
     out.annotations.push_back(dirAsHint? "[dir]" : "");
     out.exactMatches.push_back(match.exact);
     out.matchDetails.push_back(match);
   }
-  ::closedir(d);
-  std::vector<size_t> idx(out.labels.size()); for(size_t i=0;i<idx.size();++i) idx[i]=i;
-  std::sort(idx.begin(),idx.end(),[&](size_t a,size_t b){
+
+  std::vector<size_t> idx(out.labels.size());
+  for(size_t i=0;i<idx.size();++i) idx[i]=i;
+  std::sort(idx.begin(), idx.end(), [&](size_t a, size_t b){
     bool ea = (a < out.exactMatches.size()) ? out.exactMatches[a] : false;
     bool eb = (b < out.exactMatches.size()) ? out.exactMatches[b] : false;
     if(ea != eb) return ea > eb;
     return out.labels[a] < out.labels[b];
   });
-  Candidates s; s.items.reserve(idx.size()); s.labels.reserve(idx.size()); s.annotations.reserve(idx.size());
-  for(size_t k: idx){
+  Candidates s;
+  s.items.reserve(idx.size());
+  s.labels.reserve(idx.size());
+  s.annotations.reserve(idx.size());
+  for(size_t k : idx){
     s.items.push_back(out.items[k]);
     s.labels.push_back(out.labels[k]);
     s.matchPositions.push_back(out.matchPositions[k]);
