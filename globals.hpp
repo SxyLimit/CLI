@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <optional>
+#include <array>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -161,10 +162,24 @@ struct AppSettings {
   std::string messageWatchFolder = "./message";
   std::string promptName = "mycli";
   std::string promptTheme = "blue";
+  std::map<std::string, std::string> promptThemeArtPaths;
   std::string configHome;
 };
 
 extern AppSettings g_settings;
+
+inline std::optional<std::array<int, 6>> theme_gradient_colors(const std::string& theme){
+  if(theme == "blue-purple"){
+    return std::array<int, 6>{0, 153, 255, 128, 0, 255};
+  }
+  if(theme == "red-yellow"){
+    return std::array<int, 6>{255, 102, 102, 255, 221, 51};
+  }
+  if(theme == "purple-orange"){
+    return std::array<int, 6>{162, 70, 255, 255, 140, 66};
+  }
+  return std::nullopt;
+}
 
 void load_settings(const std::string& path);
 void save_settings(const std::string& path);

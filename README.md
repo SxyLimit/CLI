@@ -28,7 +28,7 @@ HOME_PATH=settings
 - **状态栏扩展**：可通过 `StatusProvider` 注册自定义状态（示例中显示当前工作目录）。
 - **外部工具配置**：支持在配置目录（默认 `./settings/`）下的 `mycli_tools.conf` 中用 INI 语法新增命令及子命令，含互斥选项、动态执行等。
 - **消息提醒**：可监听指定目录（默认当前目录下的 `message/`）中的 `.md` 文件，新建或修改后提示符前会显示红色 `[M]`，通过 `message list/last/detail` 查看。
-- **可定制提示符**：通过设置 `prompt.name` 与 `prompt.theme` 自定义提示符名称及颜色（支持蓝色与蓝紫渐变）。
+- **可定制提示符**：通过设置 `prompt.name` 与 `prompt.theme` 自定义提示符名称及颜色。提供纯蓝、蓝紫、红黄渐变与紫橙渐变四种主题，并可为任意主题配置结构化图片（`prompt.theme_art_path.<theme>`）以在 `show MyCLI` 中输出彩色图案。
 - **LLM 接口**：提供 `llm` 命令，调用 `tools/llm.py` 通过 Moonshot(Kimi) 接口（或本地回显模式）完成调用与历史查看。
 
 ## 配置目录
@@ -48,7 +48,9 @@ HOME_PATH=settings
 ## 提示符名称与主题
 
 - `setting set prompt.name <名称>`：调整提示符名称，留空则恢复默认的 `mycli`。
-- `setting set prompt.theme <blue|blue-purple>`：在纯蓝和蓝紫渐变主题之间切换，仅影响提示符名称部分。
+- `setting set prompt.theme <blue|blue-purple|red-yellow|purple-orange>`：在纯蓝与多种渐变主题之间切换。
+- `setting set prompt.theme_art_path.<theme> <path>`：为指定主题配置图片结构化文本路径（例如 `prompt.theme_art_path.red-yellow`），搭配 `tools/image_to_art.py` 生成即可在 `show MyCLI` 中显示彩色图片。
+- `setting set prompt.theme_art_path <path>`：兼容旧配置的别名，等价于设置 `prompt.theme_art_path.blue-purple`。
 
 ## LLM 命令使用说明
 

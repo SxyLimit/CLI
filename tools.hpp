@@ -4,6 +4,9 @@
 #include <thread>
 #include <cctype>
 #include <sstream>
+#include <filesystem>
+#include <fstream>
+#include <cstdint>
 
 // ===== Path candidates (inline) =====
 inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind){
@@ -294,6 +297,164 @@ inline ToolSpec make_message(){
 }
 
 // =================== Built-in Tools ===================
+struct TerminalArtImage {
+  int width = 0;
+  int height = 0;
+  std::vector<std::uint8_t> pixels;
+};
+
+inline std::optional<TerminalArtImage> load_terminal_art_image(const std::filesystem::path& path){
+  std::ifstream in(path);
+  if(!in.good()) return std::nullopt;
+  TerminalArtImage img;
+  if(!(in >> img.width >> img.height)) return std::nullopt;
+  if(img.width <= 0 || img.height <= 0) return std::nullopt;
+  const std::size_t pixelCount = static_cast<std::size_t>(img.width) * static_cast<std::size_t>(img.height);
+  img.pixels.resize(pixelCount * 3);
+  for(std::size_t idx = 0; idx < pixelCount; ++idx){
+    int r = 0, g = 0, b = 0;
+    if(!(in >> r >> g >> b)){
+      return std::nullopt;
+    }
+    r = std::clamp(r, 0, 255);
+    g = std::clamp(g, 0, 255);
+    b = std::clamp(b, 0, 255);
+    img.pixels[idx * 3 + 0] = static_cast<std::uint8_t>(r);
+    img.pixels[idx * 3 + 1] = static_cast<std::uint8_t>(g);
+    img.pixels[idx * 3 + 2] = static_cast<std::uint8_t>(b);
+  }
+  return img;
+}
+
+inline const TerminalArtImage* load_cached_terminal_art(const std::string& theme){
+  struct Cache {
+    std::string resolvedPath;
+    std::filesystem::file_time_type mtime{};
+    bool hasMtime = false;
+    bool valid = false;
+    TerminalArtImage image;
+  };
+  static std::map<std::string, Cache> caches;
+
+  auto pathIt = g_settings.promptThemeArtPaths.find(theme);
+  std::string configured = (pathIt == g_settings.promptThemeArtPaths.end()) ? std::string() : pathIt->second;
+
+  Cache& cache = caches[theme];
+  if(configured.empty()){
+    cache.valid = false;
+    cache.hasMtime = false;
+    cache.resolvedPath.clear();
+    return nullptr;
+  }
+
+  auto expandTilde = [](const std::string& raw) -> std::filesystem::path {
+    if(raw.empty() || raw[0] != '~'){
+      return std::filesystem::path(raw);
+    }
+    std::string home;
+    if(const char* env = std::getenv("HOME"); env && *env){
+      home = env;
+    }
+    if(home.empty()){
+      home = config_home();
+    }
+    if(raw.size() == 1){
+      return std::filesystem::path(home);
+    }
+    if(raw[1] == '/' || raw[1] == '\\'){
+      return std::filesystem::path(home + raw.substr(1));
+    }
+    return std::filesystem::path(raw);
+  };
+
+  std::filesystem::path provided = expandTilde(configured);
+  std::vector<std::filesystem::path> candidates;
+  auto push_unique = [&candidates](const std::filesystem::path& candidate){
+    if(std::find(candidates.begin(), candidates.end(), candidate) == candidates.end()){
+      candidates.push_back(candidate);
+    }
+  };
+  if(provided.is_absolute()){
+    push_unique(provided);
+  }else{
+    push_unique(std::filesystem::path(config_home()) / provided);
+    std::error_code cwdEc;
+    auto cwd = std::filesystem::current_path(cwdEc);
+    if(!cwdEc){
+      push_unique(cwd / provided);
+    }
+    push_unique(provided);
+  }
+
+  for(const auto& candidate : candidates){
+    std::error_code absEc;
+    std::filesystem::path resolved = std::filesystem::absolute(candidate, absEc);
+    if(absEc){
+      resolved = candidate;
+    }
+    resolved = resolved.lexically_normal();
+
+    std::error_code mtimeEc;
+    auto currentMtime = std::filesystem::last_write_time(resolved, mtimeEc);
+    if(mtimeEc){
+      continue;
+    }
+
+    if(cache.resolvedPath != resolved.string()){
+      cache.valid = false;
+      cache.hasMtime = false;
+    }
+
+    if(!cache.valid || !cache.hasMtime || cache.mtime != currentMtime){
+      auto loaded = load_terminal_art_image(resolved);
+      if(!loaded){
+        cache.valid = false;
+        cache.hasMtime = false;
+        continue;
+      }
+      cache.image = std::move(*loaded);
+      cache.valid = true;
+      cache.hasMtime = true;
+      cache.mtime = currentMtime;
+    }
+
+    if(cache.valid){
+      cache.resolvedPath = resolved.string();
+      return &cache.image;
+    }
+  }
+
+  cache.valid = false;
+  cache.hasMtime = false;
+  cache.resolvedPath.clear();
+  return nullptr;
+}
+
+inline std::vector<std::string> render_terminal_art_lines(const TerminalArtImage& img){
+  const int horizontalScale = 2;
+  std::vector<std::string> lines;
+  lines.reserve(static_cast<std::size_t>(std::max(0, img.height)));
+  for(int y = 0; y < img.height; ++y){
+    std::string line;
+    line.reserve(static_cast<std::size_t>(img.width) * static_cast<std::size_t>(horizontalScale) * 10 + 8);
+    for(int x = 0; x < img.width; ++x){
+      std::size_t idx = (static_cast<std::size_t>(y) * static_cast<std::size_t>(img.width) + static_cast<std::size_t>(x)) * 3;
+      unsigned int r = img.pixels[idx + 0];
+      unsigned int g = img.pixels[idx + 1];
+      unsigned int b = img.pixels[idx + 2];
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "\x1b[48;2;%u;%u;%um", r, g, b);
+      line += buf;
+      for(int i = 0; i < horizontalScale; ++i){
+        line.push_back(' ');
+      }
+    }
+    line += ansi::RESET;
+    lines.push_back(std::move(line));
+  }
+  return lines;
+}
+
 inline const std::vector<std::string>& mycli_ascii_art_template(){
   static const std::vector<std::string> lines = {
     R"( __  __       ____ _     ___ )",
@@ -344,9 +505,15 @@ inline std::vector<std::string> render_mycli_ascii_art(){
   std::vector<std::string> colored;
   colored.reserve(base.size());
   const std::string theme = g_settings.promptTheme;
-  if(theme == "blue-purple"){
+  if(const TerminalArtImage* art = load_cached_terminal_art(theme); art){
+    return render_terminal_art_lines(*art);
+  }
+  if(auto gradient = theme_gradient_colors(theme); gradient.has_value()){
+    const auto& colors = *gradient;
     for(const auto& line : base){
-      colored.push_back(gradient_line_with_theme(line, 0, 153, 255, 128, 0, 255));
+      colored.push_back(gradient_line_with_theme(line,
+                                                colors[0], colors[1], colors[2],
+                                                colors[3], colors[4], colors[5]));
     }
   }else{
     for(const auto& line : base){

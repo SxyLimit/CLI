@@ -1175,11 +1175,12 @@ static void renderPromptLabel(){
   }
   const std::string name = promptNamePlain();
   const std::string theme = g_settings.promptTheme;
-  if(theme == "blue-purple"){
+  if(auto gradient = theme_gradient_colors(theme); gradient.has_value()){
     if(!name.empty()){
       std::cout << ansi::BOLD;
-      const int startR = 0, startG = 153, startB = 255;
-      const int endR = 128, endG = 0, endB = 255;
+      const auto& colors = *gradient;
+      const int startR = colors[0], startG = colors[1], startB = colors[2];
+      const int endR = colors[3], endG = colors[4], endB = colors[5];
       auto glyphs = utf8Glyphs(name);
       size_t glyphCount = glyphs.size();
       int totalWidth = 0;
