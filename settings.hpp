@@ -4,6 +4,7 @@
 
 #include <sstream>
 #include <optional>
+#include <cstring>
 
 inline AppSettings g_settings{};
 
@@ -34,7 +35,12 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"ui.path_error_hint", {SettingValueKind::Boolean, {"false", "true"}}},
     {"message.folder", {SettingValueKind::String, {}}},
     {"prompt.name", {SettingValueKind::String, {}}},
-    {"prompt.theme", {SettingValueKind::Enum, {"blue", "blue-purple"}}},
+    {"prompt.theme", {SettingValueKind::Enum, {"blue", "blue-purple", "red-yellow", "purple-orange"}}},
+    {"prompt.theme_art_path", {SettingValueKind::String, {}}},
+    {"prompt.theme_art_path.blue", {SettingValueKind::String, {}}},
+    {"prompt.theme_art_path.blue-purple", {SettingValueKind::String, {}}},
+    {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}}},
+    {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}}},
     {"home.path", {SettingValueKind::String, {}}},
   };
   return infos;
@@ -158,9 +164,15 @@ inline void load_settings(const std::string& path){
       }else if(key=="prompt.theme"){
         std::string t = val;
         std::transform(t.begin(), t.end(), t.begin(), ::tolower);
-        if(t=="blue" || t=="blue-purple"){
+        if(t=="blue" || t=="blue-purple" || t=="red-yellow" || t=="purple-orange"){
           g_settings.promptTheme = t;
         }
+      }else if(key=="prompt.theme_art_path"){
+        g_settings.promptThemeArtPaths["blue-purple"] = val;
+      }else if(startsWith(key, "prompt.theme_art_path.")){
+        std::string themeKey = key.substr(std::strlen("prompt.theme_art_path."));
+        std::transform(themeKey.begin(), themeKey.end(), themeKey.begin(), ::tolower);
+        g_settings.promptThemeArtPaths[themeKey] = val;
       }else if(key=="home.path"){
         desiredHome = val;
       }
@@ -189,6 +201,15 @@ inline void save_settings(const std::string& path){
   out << "message.folder=" << g_settings.messageWatchFolder << "\n";
   out << "prompt.name=" << g_settings.promptName << "\n";
   out << "prompt.theme=" << g_settings.promptTheme << "\n";
+  auto pathForTheme = [&](const std::string& theme) -> std::string {
+    auto it = g_settings.promptThemeArtPaths.find(theme);
+    if(it == g_settings.promptThemeArtPaths.end()) return "";
+    return it->second;
+  };
+  out << "prompt.theme_art_path=" << pathForTheme("blue-purple") << "\n";
+  for(const std::string& themeKey : {std::string("blue"), std::string("blue-purple"), std::string("red-yellow"), std::string("purple-orange")}){
+    out << "prompt.theme_art_path." << themeKey << "=" << pathForTheme(themeKey) << "\n";
+  }
 }
 
 inline void apply_settings_to_runtime(){
@@ -219,6 +240,17 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="prompt.theme"){
     value = g_settings.promptTheme; return true;
+  }
+  if(key=="prompt.theme_art_path"){
+    auto it = g_settings.promptThemeArtPaths.find("blue-purple");
+    value = (it==g_settings.promptThemeArtPaths.end())? "" : it->second;
+    return true;
+  }
+  if(startsWith(key, "prompt.theme_art_path.")){
+    std::string themeKey = key.substr(std::strlen("prompt.theme_art_path."));
+    auto it = g_settings.promptThemeArtPaths.find(themeKey);
+    value = (it==g_settings.promptThemeArtPaths.end())? "" : it->second;
+    return true;
   }
   if(key=="home.path"){
     value = g_settings.configHome; return true;
@@ -285,11 +317,21 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
   if(key=="prompt.theme"){
     std::string t = value;
     std::transform(t.begin(), t.end(), t.begin(), ::tolower);
-    if(!(t=="blue" || t=="blue-purple")){
+    if(!(t=="blue" || t=="blue-purple" || t=="red-yellow" || t=="purple-orange")){
       error = "invalid_value";
       return false;
     }
     g_settings.promptTheme = t;
+    return true;
+  }
+  if(key=="prompt.theme_art_path"){
+    g_settings.promptThemeArtPaths["blue-purple"] = value;
+    return true;
+  }
+  if(startsWith(key, "prompt.theme_art_path.")){
+    std::string themeKey = key.substr(std::strlen("prompt.theme_art_path."));
+    std::transform(themeKey.begin(), themeKey.end(), themeKey.begin(), ::tolower);
+    g_settings.promptThemeArtPaths[themeKey] = value;
     return true;
   }
   if(key=="home.path"){
