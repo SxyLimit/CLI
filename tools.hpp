@@ -51,6 +51,7 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
     out.matchPositions.push_back(std::move(positions));
     out.annotations.push_back(dirAsHint? "[dir]" : "");
     out.exactMatches.push_back(match.exact);
+    out.matchDetails.push_back(match);
   }
   ::closedir(d);
   std::vector<size_t> idx(out.labels.size()); for(size_t i=0;i<idx.size();++i) idx[i]=i;
@@ -68,7 +69,10 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
     s.annotations.push_back(out.annotations[k]);
     if(k < out.exactMatches.size()) s.exactMatches.push_back(out.exactMatches[k]);
     else s.exactMatches.push_back(false);
+    if(k < out.matchDetails.size()) s.matchDetails.push_back(out.matchDetails[k]);
+    else s.matchDetails.emplace_back();
   }
+  sortCandidatesByMatch(base, s);
   return s;
 }
 

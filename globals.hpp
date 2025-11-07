@@ -92,21 +92,33 @@ struct ToolSpec {
   std::function<void(const std::vector<std::string>&)> handler;
 };
 
+struct MatchResult {
+  bool matched = false;
+  bool exact = false;
+  std::vector<int> positions;
+  double score = -1e300;
+  int boundaryHits = 0;
+  int maxRun = 0;
+  int totalGaps = 0;
+  int windowSpan = 0;
+  int firstIndex = 0;
+  int caseMismatch = 0;
+  bool isExactEqual = false;
+  bool isSubstring = false;
+  bool isPrefix = false;
+};
+
 struct Candidates {
   std::vector<std::string> items;
   std::vector<std::string> labels;
   std::vector<std::vector<int>> matchPositions;
   std::vector<std::string> annotations;
   std::vector<bool> exactMatches;
-};
-
-struct MatchResult {
-  bool matched = false;
-  bool exact = false;
-  std::vector<int> positions;
+  std::vector<MatchResult> matchDetails;
 };
 
 MatchResult compute_match(const std::string& candidate, const std::string& pattern);
+void sortCandidatesByMatch(const std::string& query, Candidates& cand);
 
 struct StatusProvider {
   std::string name;
@@ -153,10 +165,16 @@ void register_tools_from_config(const std::string& path);
 // ===== Settings support =====
 enum class MatchMode { Prefix, Subsequence };
 
+enum class SubsequenceStrategy {
+  Ranked,
+  Greedy,
+};
+
 struct AppSettings {
   CwdMode cwdMode = CwdMode::Full;
   bool completionIgnoreCase = false;
   bool completionSubsequence = false;
+  SubsequenceStrategy completionSubsequenceStrategy = SubsequenceStrategy::Ranked;
   std::string language = "en";
   bool showPathErrorHint = true;
   std::string messageWatchFolder = "./message";
