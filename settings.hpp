@@ -31,6 +31,7 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"prompt.cwd", {SettingValueKind::Enum, {"full", "omit", "hidden"}}},
     {"completion.ignore_case", {SettingValueKind::Boolean, {"false", "true"}}},
     {"completion.subsequence", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"completion.subsequence_mode", {SettingValueKind::Enum, {"ranked", "greedy"}}},
     {"language", {SettingValueKind::String, {}}},
     {"ui.path_error_hint", {SettingValueKind::Boolean, {"false", "true"}}},
     {"message.folder", {SettingValueKind::String, {}}},
@@ -72,6 +73,21 @@ bool parseCwdMode(const std::string& v, CwdMode& out){
   if(t=="full"){ out = CwdMode::Full; return true; }
   if(t=="omit"){ out = CwdMode::Omit; return true; }
   if(t=="hidden"){ out = CwdMode::Hidden; return true; }
+  return false;
+}
+
+std::string subsequenceStrategyToString(SubsequenceStrategy mode){
+  switch(mode){
+    case SubsequenceStrategy::Ranked: return "ranked";
+    case SubsequenceStrategy::Greedy: return "greedy";
+  }
+  return "ranked";
+}
+
+bool parseSubsequenceStrategy(const std::string& v, SubsequenceStrategy& out){
+  std::string t = normalizeBool(v);
+  if(t=="ranked"){ out = SubsequenceStrategy::Ranked; return true; }
+  if(t=="greedy"){ out = SubsequenceStrategy::Greedy; return true; }
   return false;
 }
 
@@ -153,6 +169,9 @@ inline void load_settings(const std::string& path){
         bool b; if(parseBool(val,b)) g_settings.completionIgnoreCase = b;
       }else if(key=="completion.subsequence"){
         bool b; if(parseBool(val,b)) g_settings.completionSubsequence = b;
+      }else if(key=="completion.subsequence_mode"){
+        SubsequenceStrategy mode;
+        if(parseSubsequenceStrategy(val, mode)) g_settings.completionSubsequenceStrategy = mode;
       }else if(key=="language"){
         if(!val.empty()){ g_settings.language = val; settings_register_language(val); }
       }else if(key=="ui.path_error_hint"){
@@ -196,6 +215,7 @@ inline void save_settings(const std::string& path){
   out << "prompt.cwd=" << cwdModeToString(g_settings.cwdMode) << "\n";
   out << "completion.ignore_case=" << (g_settings.completionIgnoreCase? "true" : "false") << "\n";
   out << "completion.subsequence=" << (g_settings.completionSubsequence? "true" : "false") << "\n";
+  out << "completion.subsequence_mode=" << subsequenceStrategyToString(g_settings.completionSubsequenceStrategy) << "\n";
   out << "language=" << g_settings.language << "\n";
   out << "ui.path_error_hint=" << (g_settings.showPathErrorHint? "true" : "false") << "\n";
   out << "message.folder=" << g_settings.messageWatchFolder << "\n";
@@ -225,6 +245,9 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="completion.subsequence"){
     value = g_settings.completionSubsequence? "true" : "false"; return true;
+  }
+  if(key=="completion.subsequence_mode"){
+    value = subsequenceStrategyToString(g_settings.completionSubsequenceStrategy); return true;
   }
   if(key=="language"){
     value = g_settings.language; return true;
@@ -285,6 +308,15 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
       return false;
     }
     g_settings.completionSubsequence = b;
+    return true;
+  }
+  if(key=="completion.subsequence_mode"){
+    SubsequenceStrategy mode;
+    if(!parseSubsequenceStrategy(value, mode)){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.completionSubsequenceStrategy = mode;
     return true;
   }
   if(key=="language"){

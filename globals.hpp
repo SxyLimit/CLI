@@ -165,10 +165,16 @@ void register_tools_from_config(const std::string& path);
 // ===== Settings support =====
 enum class MatchMode { Prefix, Subsequence };
 
+enum class SubsequenceStrategy {
+  Ranked,
+  Greedy,
+};
+
 struct AppSettings {
   CwdMode cwdMode = CwdMode::Full;
   bool completionIgnoreCase = false;
   bool completionSubsequence = false;
+  SubsequenceStrategy completionSubsequenceStrategy = SubsequenceStrategy::Ranked;
   std::string language = "en";
   bool showPathErrorHint = true;
   std::string messageWatchFolder = "./message";

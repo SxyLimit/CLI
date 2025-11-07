@@ -639,6 +639,67 @@ static int subseq_case_mismatch(const std::string& target, const std::string& qu
   return mismatch;
 }
 
+static std::optional<MatchResult> greedy_subsequence_alignment(const std::string& target,
+                                                               const std::string& query,
+                                                               bool ignoreCase){
+  if(query.empty()){
+    MatchResult base;
+    base.matched = true;
+    base.exact = target.empty();
+    base.isExactEqual = base.exact;
+    base.isSubstring = true;
+    base.isPrefix = true;
+    base.score = 0.0;
+    return base;
+  }
+
+  std::vector<int> positions;
+  positions.reserve(query.size());
+  size_t qi = 0;
+  auto norm = [&](char ch){
+    return ignoreCase ? static_cast<char>(std::tolower(static_cast<unsigned char>(ch))) : ch;
+  };
+
+  for(size_t i=0;i<target.size() && qi<query.size();++i){
+    if(norm(target[i]) == norm(query[qi])){
+      positions.push_back(static_cast<int>(i));
+      ++qi;
+    }
+  }
+
+  if(qi != query.size()) return std::nullopt;
+
+  MatchResult result;
+  result.matched = true;
+  result.positions = std::move(positions);
+  result.score = 0.0;
+  result.boundaryHits = subseq_count_boundary_hits(target, result.positions);
+  result.maxRun = subseq_longest_run(result.positions);
+  result.totalGaps = 0;
+  for(size_t i=1;i<result.positions.size();++i){
+    result.totalGaps += std::max(0, result.positions[i] - result.positions[i-1] - 1);
+  }
+  result.windowSpan = result.positions.empty()? 0 : (result.positions.back() - result.positions.front());
+  result.firstIndex = result.positions.empty()? 0 : result.positions.front();
+  result.caseMismatch = subseq_case_mismatch(target, query, result.positions);
+  result.isSubstring = (result.maxRun == static_cast<int>(result.positions.size()));
+  result.isPrefix = (!result.positions.empty() && result.positions.front() == 0);
+
+  bool isExact = (target.size() == query.size());
+  if(isExact){
+    isExact = std::equal(target.begin(), target.end(), query.begin(),
+                         [&](char a, char b){
+                           return ignoreCase
+                              ? std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b))
+                              : a == b;
+                         });
+  }
+  result.exact = isExact;
+  result.isExactEqual = isExact;
+
+  return result;
+}
+
 static std::optional<MatchResult> best_subsequence_alignment(const std::string& target,
                                                              const std::string& query,
                                                              bool ignoreCase){
@@ -786,8 +847,14 @@ MatchResult compute_match(const std::string& candidate, const std::string& patte
   }
 
   if(subseq){
-    if(auto best = best_subsequence_alignment(candidate, pattern, ignoreCase)){
-      return *best;
+    if(g_settings.completionSubsequenceStrategy == SubsequenceStrategy::Ranked){
+      if(auto best = best_subsequence_alignment(candidate, pattern, ignoreCase)){
+        return *best;
+      }
+    }else{
+      if(auto greedy = greedy_subsequence_alignment(candidate, pattern, ignoreCase)){
+        return *greedy;
+      }
     }
   }
 
@@ -831,6 +898,7 @@ MatchResult compute_match(const std::string& candidate, const std::string& patte
 
 void sortCandidatesByMatch(const std::string& query, Candidates& cand){
   if(!g_settings.completionSubsequence) return;
+  if(g_settings.completionSubsequenceStrategy != SubsequenceStrategy::Ranked) return;
   if(query.empty()) return;
   size_t n = cand.labels.size();
   if(n <= 1) return;
