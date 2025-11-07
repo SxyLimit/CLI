@@ -81,7 +81,6 @@ inline void ensure_virtual_terminal_output(){
     DWORD mode = 0;
     if(!GetConsoleMode(handle, &mode)) return;
     mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-    mode |= DISABLE_NEWLINE_AUTO_RETURN;
     SetConsoleMode(handle, mode);
   };
 

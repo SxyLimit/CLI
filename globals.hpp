@@ -47,9 +47,13 @@ inline std::string join(const std::vector<std::string>& v, const std::string& se
 inline bool isDirFS(const std::string& path){ struct stat st{}; return ::stat(path.c_str(),&st)==0 && S_ISDIR(st.st_mode); }
 inline std::string basenameOf(const std::string& p){
   if(p.empty()) return p;
-  std::string s=p; while(s.size()>1 && s.back()=='/') s.pop_back();
-  size_t pos=s.find_last_of('/'); if(pos==std::string::npos) return s;
-  if(pos==s.size()-1) return s; return s.substr(pos+1);
+  auto isSep = [](char ch){ return ch=='/' || ch=='\\'; };
+  std::string s = p;
+  while(s.size()>1 && isSep(s.back())) s.pop_back();
+  size_t pos = s.find_last_of("/\\");
+  if(pos==std::string::npos) return s;
+  if(pos==s.size()-1) return s;
+  return s.substr(pos+1);
 }
 
 // last word split
