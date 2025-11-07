@@ -22,6 +22,8 @@
 #include <filesystem>
 #include <numeric>
 #include <type_traits>
+#include <cmath>
+#include <limits>
 
 #include "globals.hpp"
 #include "tools.hpp"
@@ -569,64 +571,313 @@ std::string trFmt(const std::string& key, const std::map<std::string, std::strin
   return out;
 }
 
+struct SubsequenceWeights {
+  double baseHit = 1.0;
+  double boundaryBonus = 7.0;
+  double headBonus = 1.0;
+  double consecutiveBonusPerExtend = 4.0;
+  double caseMatchBonus = 0.5;
+  double gapBase = 1.0;
+  double gapQuad = 0.10;
+  double firstIndexPenalty = 0.10;
+  double lengthPenaltyLambda = 0.15;
+  double exactEqualBonus = 20.0;
+  double substringBonus = 10.0;
+  double prefixBonus = 5.0;
+};
+
+static const SubsequenceWeights kSubsequenceWeights{};
+
+static inline bool subseq_is_sep(char c){
+  return c=='/' || c=='.' || c=='_' || c=='-' || std::isspace(static_cast<unsigned char>(c));
+}
+
+static inline bool subseq_is_boundary(const std::string& text, int i){
+  if(i <= 0) return true;
+  char prev = text[static_cast<size_t>(i) - 1];
+  char cur = text[static_cast<size_t>(i)];
+  if(subseq_is_sep(prev)) return true;
+  bool camel = std::islower(static_cast<unsigned char>(prev)) && std::isupper(static_cast<unsigned char>(cur));
+  bool typeSwitch = (std::isalnum(static_cast<unsigned char>(prev)) != 0) ^ (std::isalnum(static_cast<unsigned char>(cur)) != 0);
+  return camel || typeSwitch;
+}
+
+static int subseq_count_boundary_hits(const std::string& text, const std::vector<int>& pos){
+  int count = 0;
+  for(int idx : pos){
+    if(idx >= 0 && idx < static_cast<int>(text.size()) && subseq_is_boundary(text, idx)) ++count;
+  }
+  return count;
+}
+
+static int subseq_longest_run(const std::vector<int>& pos){
+  if(pos.empty()) return 0;
+  int best = 1, cur = 1;
+  for(size_t i=1;i<pos.size();++i){
+    if(pos[i] == pos[i-1] + 1){
+      ++cur;
+    }else{
+      best = std::max(best, cur);
+      cur = 1;
+    }
+  }
+  best = std::max(best, cur);
+  return best;
+}
+
+static int subseq_case_mismatch(const std::string& target, const std::string& query, const std::vector<int>& pos){
+  int mismatch = 0;
+  for(size_t j=0;j<pos.size();++j){
+    int i = pos[j];
+    if(i < 0 || i >= static_cast<int>(target.size())) continue;
+    char tc = target[static_cast<size_t>(i)];
+    char qc = query[j];
+    if(std::tolower(static_cast<unsigned char>(tc)) == std::tolower(static_cast<unsigned char>(qc)) && tc != qc){
+      ++mismatch;
+    }
+  }
+  return mismatch;
+}
+
+static std::optional<MatchResult> best_subsequence_alignment(const std::string& target,
+                                                             const std::string& query,
+                                                             bool ignoreCase){
+  const int n = static_cast<int>(target.size());
+  const int m = static_cast<int>(query.size());
+  if(m == 0){
+    MatchResult base;
+    base.matched = true;
+    base.exact = target.empty();
+    base.isExactEqual = base.exact;
+    base.isSubstring = true;
+    base.isPrefix = true;
+    base.score = 0.0;
+    return base;
+  }
+
+  const double NEG_INF = -1e300;
+  std::vector<std::vector<double>> dp(n, std::vector<double>(m, NEG_INF));
+  std::vector<std::vector<int>> prev(n, std::vector<int>(m, -1));
+  std::vector<int> boundary(n, 0);
+  for(int i=0;i<n;++i){
+    boundary[i] = subseq_is_boundary(target, i) ? 1 : 0;
+  }
+
+  auto eq = [&](char a, char b){
+    if(ignoreCase){
+      return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+    }
+    return a == b;
+  };
+
+  for(int i=0;i<n;++i){
+    if(!eq(target[i], query[0])) continue;
+    double score = kSubsequenceWeights.baseHit;
+    if(boundary[i]) score += kSubsequenceWeights.boundaryBonus;
+    if(i == 0) score += kSubsequenceWeights.headBonus;
+    if(target[i] == query[0]) score += kSubsequenceWeights.caseMatchBonus;
+    score -= kSubsequenceWeights.firstIndexPenalty * i;
+    dp[i][0] = score;
+    prev[i][0] = -1;
+  }
+
+  for(int j=1;j<m;++j){
+    for(int i=j;i<n;++i){
+      if(!eq(target[i], query[j])) continue;
+      double bestScore = NEG_INF;
+      int bestPrev = -1;
+      for(int k=j-1;k<i;++k){
+        double prevScore = dp[k][j-1];
+        if(prevScore <= NEG_INF/2) continue;
+        double trans = prevScore;
+        int gap = i - k - 1;
+        if(gap > 0){
+          double penalty = kSubsequenceWeights.gapBase * gap;
+          if(gap > 1){
+            penalty += kSubsequenceWeights.gapQuad * (gap - 1) * (gap - 1);
+          }
+          trans -= penalty;
+        }
+        trans += kSubsequenceWeights.baseHit;
+        if(boundary[i]) trans += kSubsequenceWeights.boundaryBonus;
+        if(target[i] == query[j]) trans += kSubsequenceWeights.caseMatchBonus;
+        if(i == k + 1) trans += kSubsequenceWeights.consecutiveBonusPerExtend;
+        if(trans > bestScore){
+          bestScore = trans;
+          bestPrev = k;
+        }
+      }
+      if(bestPrev != -1){
+        dp[i][j] = bestScore;
+        prev[i][j] = bestPrev;
+      }
+    }
+  }
+
+  double best = NEG_INF;
+  int endIndex = -1;
+  for(int i=m-1;i<n;++i){
+    if(dp[i][m-1] > best){
+      best = dp[i][m-1];
+      endIndex = i;
+    }
+  }
+  if(endIndex == -1) return std::nullopt;
+
+  std::vector<int> pos(static_cast<size_t>(m));
+  int ci = endIndex;
+  int cj = m - 1;
+  while(cj >= 0){
+    pos[static_cast<size_t>(cj)] = ci;
+    ci = prev[ci][cj];
+    --cj;
+  }
+
+  int firstIndex = pos.front();
+  int windowSpan = pos.back() - pos.front();
+  int gaps = 0;
+  for(size_t t=1;t<pos.size();++t){
+    gaps += std::max(0, pos[t] - pos[t-1] - 1);
+  }
+
+  int maxRun = subseq_longest_run(pos);
+  bool isSubstring = (maxRun == m);
+  bool isPrefix = (firstIndex == 0);
+  bool isExact = ((int)target.size() == m) && isSubstring &&
+                 std::equal(target.begin(), target.end(), query.begin(),
+                            [&](char a, char b){ return std::tolower(static_cast<unsigned char>(a)) ==
+                                                      std::tolower(static_cast<unsigned char>(b)); });
+
+  if(isExact) best += kSubsequenceWeights.exactEqualBonus;
+  if(isSubstring) best += kSubsequenceWeights.substringBonus;
+  if(isPrefix) best += kSubsequenceWeights.prefixBonus;
+  best -= kSubsequenceWeights.lengthPenaltyLambda * std::log1p(static_cast<double>(target.size()));
+
+  MatchResult result;
+  result.matched = true;
+  result.positions = std::move(pos);
+  result.score = best;
+  result.boundaryHits = subseq_count_boundary_hits(target, result.positions);
+  result.maxRun = maxRun;
+  result.totalGaps = gaps;
+  result.windowSpan = windowSpan;
+  result.firstIndex = firstIndex;
+  result.caseMismatch = subseq_case_mismatch(target, query, result.positions);
+  result.isSubstring = isSubstring;
+  result.isPrefix = isPrefix;
+  result.isExactEqual = isExact;
+  result.exact = isExact;
+  return result;
+}
+
 MatchResult compute_match(const std::string& candidate, const std::string& pattern){
   MatchResult res;
+  bool ignoreCase = g_settings.completionIgnoreCase;
+  bool subseq = g_settings.completionSubsequence;
+
   if(pattern.empty()){
     res.matched = true;
     res.exact = candidate.empty();
+    res.isExactEqual = res.exact;
+    res.isSubstring = true;
+    res.isPrefix = true;
+    res.score = 0.0;
     return res;
   }
-  bool ignoreCase = g_settings.completionIgnoreCase;
-  bool subseq = g_settings.completionSubsequence;
+
+  if(subseq){
+    if(auto best = best_subsequence_alignment(candidate, pattern, ignoreCase)){
+      return *best;
+    }
+  }
+
   auto normalize = [&](char ch){
-    return ignoreCase ? static_cast<char>(std::tolower(static_cast<unsigned char>(ch)))
-                      : ch;
+    return ignoreCase ? static_cast<char>(std::tolower(static_cast<unsigned char>(ch))) : ch;
   };
 
-  if(candidate.size() == pattern.size()){
-    bool same = true;
-    res.positions.reserve(candidate.size());
-    for(size_t i=0;i<candidate.size();++i){
-      char c = normalize(candidate[i]);
-      char pc = normalize(pattern[i]);
-      if(c != pc){
-        same = false;
-        break;
-      }
-      res.positions.push_back(static_cast<int>(i));
-    }
-    if(same){
-      res.matched = true;
-      res.exact = true;
-      return res;
-    }
-    res.positions.clear();
-  }
-  if(subseq){
-    size_t p = 0;
-    for(size_t i=0;i<candidate.size() && p<pattern.size();++i){
-      char c = normalize(candidate[i]);
-      char pc = normalize(pattern[p]);
-      if(c==pc){
-        res.positions.push_back(static_cast<int>(i));
-        ++p;
-      }
-    }
-    if(p==pattern.size()){
-      res.matched = true;
-      return res;
-    }
-    res.positions.clear();
-  }
-  if(pattern.size()>candidate.size()) return res;
+  if(pattern.size() > candidate.size()) return res;
+
+  bool prefix = true;
+  res.positions.clear();
+  res.positions.reserve(pattern.size());
   for(size_t i=0;i<pattern.size();++i){
     char c = normalize(candidate[i]);
     char pc = normalize(pattern[i]);
-    if(c!=pc) return res;
+    if(c != pc){
+      prefix = false;
+      break;
+    }
     res.positions.push_back(static_cast<int>(i));
   }
+  if(!prefix){
+    res.positions.clear();
+    return res;
+  }
+
   res.matched = true;
+  res.exact = (candidate.size() == pattern.size());
+  res.isExactEqual = res.exact;
+  res.isPrefix = true;
+  res.isSubstring = !res.positions.empty();
+  res.score = 0.0;
+  res.boundaryHits = subseq_count_boundary_hits(candidate, res.positions);
+  res.maxRun = static_cast<int>(res.positions.size());
+  res.totalGaps = 0;
+  res.windowSpan = res.positions.empty() ? 0 : (res.positions.back() - res.positions.front());
+  res.firstIndex = res.positions.empty() ? 0 : res.positions.front();
+  res.caseMismatch = subseq_case_mismatch(candidate, pattern, res.positions);
   return res;
+}
+
+void sortCandidatesByMatch(const std::string& query, Candidates& cand){
+  if(!g_settings.completionSubsequence) return;
+  if(query.empty()) return;
+  size_t n = cand.labels.size();
+  if(n <= 1) return;
+  if(cand.matchDetails.size() != n) return;
+
+  std::vector<size_t> order(n);
+  std::iota(order.begin(), order.end(), size_t{0});
+  auto cmp = [&](size_t lhs, size_t rhs){
+    const MatchResult& a = cand.matchDetails[lhs];
+    const MatchResult& b = cand.matchDetails[rhs];
+    if(a.score != b.score) return a.score > b.score;
+    if(a.isExactEqual != b.isExactEqual) return a.isExactEqual && !b.isExactEqual;
+    if(a.isSubstring != b.isSubstring) return a.isSubstring && !b.isSubstring;
+    if(a.isPrefix != b.isPrefix) return a.isPrefix && !b.isPrefix;
+    if(a.boundaryHits != b.boundaryHits) return a.boundaryHits > b.boundaryHits;
+    if(a.maxRun != b.maxRun) return a.maxRun > b.maxRun;
+    if(a.totalGaps != b.totalGaps) return a.totalGaps < b.totalGaps;
+    if(a.windowSpan != b.windowSpan) return a.windowSpan < b.windowSpan;
+    if(a.firstIndex != b.firstIndex) return a.firstIndex < b.firstIndex;
+    if(a.caseMismatch != b.caseMismatch) return a.caseMismatch < b.caseMismatch;
+    if(cand.labels[lhs].size() != cand.labels[rhs].size()) return cand.labels[lhs].size() < cand.labels[rhs].size();
+    return cand.labels[lhs] < cand.labels[rhs];
+  };
+
+  std::stable_sort(order.begin(), order.end(), cmp);
+
+  bool changed = false;
+  for(size_t i=0;i<n;++i){
+    if(order[i] != i){ changed = true; break; }
+  }
+  if(!changed) return;
+
+  auto reorderVec = [&](auto& vec){
+    using VecType = std::decay_t<decltype(vec)>;
+    VecType tmp;
+    tmp.reserve(vec.size());
+    for(size_t idx : order){
+      tmp.push_back(vec[idx]);
+    }
+    vec = std::move(tmp);
+  };
+  reorderVec(cand.items);
+  reorderVec(cand.labels);
+  reorderVec(cand.matchPositions);
+  reorderVec(cand.annotations);
+  reorderVec(cand.exactMatches);
+  reorderVec(cand.matchDetails);
 }
 
 // ===== Prompt params =====
@@ -794,6 +1045,11 @@ static bool inSubcommandSlot(const ToolSpec& spec, const std::vector<std::string
   return false;
 }
 
+static Candidates finalizeCandidates(const std::string& query, Candidates&& cand){
+  sortCandidatesByMatch(query, cand);
+  return std::move(cand);
+}
+
 static Candidates firstWordCandidates(const std::string& buf){
   Candidates out; auto sw=splitLastWord(buf);
   if(!sw.before.empty()) return out;
@@ -811,8 +1067,9 @@ static Candidates firstWordCandidates(const std::string& buf){
     out.matchPositions.push_back(match.positions);
     out.annotations.push_back("");
     out.exactMatches.push_back(match.exact);
+    out.matchDetails.push_back(match);
   }
-  return out;
+  return finalizeCandidates(sw.word, std::move(out));
 }
 
 static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf){
@@ -829,8 +1086,9 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       out.matchPositions.push_back(match.positions);
       out.annotations.push_back("");
       out.exactMatches.push_back(match.exact);
+      out.matchDetails.push_back(match);
     }
-    if(!out.items.empty()) return out;
+    if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
   }
 
   // 是否子命令上下文
@@ -866,8 +1124,9 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.matchPositions.push_back(match.positions);
           out.annotations.push_back("");
           out.exactMatches.push_back(match.exact);
+          out.matchDetails.push_back(match);
         }
-        if(!out.items.empty()) return out;
+        if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
       }
       if(sub->name=="set" && idx==1){
         std::string keyName = (toks.size()>=3? toks[2] : "");
@@ -880,8 +1139,9 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.matchPositions.push_back(match.positions);
           out.annotations.push_back("");
           out.exactMatches.push_back(match.exact);
+          out.matchDetails.push_back(match);
         }
-        if(!out.items.empty()) return out;
+        if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
       }
     }
   }
@@ -910,8 +1170,9 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
         }
         out.annotations.push_back(annotation);
         out.exactMatches.push_back(match.exact);
+        out.matchDetails.push_back(match);
       }
-      if(!out.items.empty()) return out;
+      if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
     }
   }
 
@@ -935,12 +1196,13 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.matchPositions.push_back(match.positions);
           out.annotations.push_back("");
           out.exactMatches.push_back(match.exact);
+          out.matchDetails.push_back(match);
         }
         return true;
       } return false;
     };
-    if(sub){ for(auto &o: sub->options) if(tryValue(o)) return out; }
-    for(auto &o: spec.options) if(tryValue(o)) return out;
+    if(sub){ for(auto &o: sub->options) if(tryValue(o)) return finalizeCandidates(sw.word, std::move(out)); }
+    for(auto &o: spec.options) if(tryValue(o)) return finalizeCandidates(sw.word, std::move(out));
   }
 
   // 如果“下一个位置参数占位符”为路径型 → 直接进入路径补全（无需 ./ 或 /）
@@ -976,12 +1238,13 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
           out.matchPositions.push_back(match.positions);
           out.annotations.push_back("");
           out.exactMatches.push_back(match.exact);
+          out.matchDetails.push_back(match);
         }
       }
     };
     if(sub) addOpts(sub->options);
     addOpts(spec.options);
-    if(!out.items.empty()) return out;
+    if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
   }
 
   // 路径模式（兜底）
@@ -1023,6 +1286,7 @@ static void prioritizeExactMatches(Candidates& cand){
   reorderVec(cand.matchPositions);
   reorderVec(cand.annotations);
   reorderVec(cand.exactMatches);
+  reorderVec(cand.matchDetails);
 }
 
 static Candidates computeCandidates(const std::string& buf){
@@ -1044,9 +1308,10 @@ static Candidates computeCandidates(const std::string& buf){
         out.matchPositions.push_back(match.positions);
         out.annotations.push_back("");
         out.exactMatches.push_back(match.exact);
+        out.matchDetails.push_back(match);
       }
     }
-    return out;
+    return finalizeCandidates(sw.word, std::move(out));
   }
 
   if(toks.empty()) return firstWordCandidates(buf);
