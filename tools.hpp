@@ -347,42 +347,87 @@ inline const TerminalArtImage* load_cached_terminal_art(const std::string& theme
     return nullptr;
   }
 
-  std::filesystem::path p(configured);
-  if(p.is_relative()){
-    p = std::filesystem::path(config_home()) / p;
-  }
-  p = std::filesystem::absolute(p);
+  auto expandTilde = [](const std::string& raw) -> std::filesystem::path {
+    if(raw.empty() || raw[0] != '~'){
+      return std::filesystem::path(raw);
+    }
+    std::string home;
+    if(const char* env = std::getenv("HOME"); env && *env){
+      home = env;
+    }
+    if(home.empty()){
+      home = config_home();
+    }
+    if(raw.size() == 1){
+      return std::filesystem::path(home);
+    }
+    if(raw[1] == '/' || raw[1] == '\\'){
+      return std::filesystem::path(home + raw.substr(1));
+    }
+    return std::filesystem::path(raw);
+  };
 
-  if(cache.resolvedPath != p.string()){
-    cache.valid = false;
-    cache.hasMtime = false;
+  std::filesystem::path provided = expandTilde(configured);
+  std::vector<std::filesystem::path> candidates;
+  auto push_unique = [&candidates](const std::filesystem::path& candidate){
+    if(std::find(candidates.begin(), candidates.end(), candidate) == candidates.end()){
+      candidates.push_back(candidate);
+    }
+  };
+  if(provided.is_absolute()){
+    push_unique(provided);
+  }else{
+    push_unique(std::filesystem::path(config_home()) / provided);
+    std::error_code cwdEc;
+    auto cwd = std::filesystem::current_path(cwdEc);
+    if(!cwdEc){
+      push_unique(cwd / provided);
+    }
+    push_unique(provided);
   }
 
-  std::error_code ec;
-  auto currentMtime = std::filesystem::last_write_time(p, ec);
-  if(ec){
-    cache.valid = false;
-    cache.hasMtime = false;
-    cache.resolvedPath = p.string();
-    return nullptr;
-  }
+  for(const auto& candidate : candidates){
+    std::error_code absEc;
+    std::filesystem::path resolved = std::filesystem::absolute(candidate, absEc);
+    if(absEc){
+      resolved = candidate;
+    }
+    resolved = resolved.lexically_normal();
 
-  if(!cache.valid || !cache.hasMtime || cache.mtime != currentMtime){
-    auto loaded = load_terminal_art_image(p);
-    if(!loaded){
+    std::error_code mtimeEc;
+    auto currentMtime = std::filesystem::last_write_time(resolved, mtimeEc);
+    if(mtimeEc){
+      continue;
+    }
+
+    if(cache.resolvedPath != resolved.string()){
       cache.valid = false;
+      cache.hasMtime = false;
+    }
+
+    if(!cache.valid || !cache.hasMtime || cache.mtime != currentMtime){
+      auto loaded = load_terminal_art_image(resolved);
+      if(!loaded){
+        cache.valid = false;
+        cache.hasMtime = false;
+        continue;
+      }
+      cache.image = std::move(*loaded);
+      cache.valid = true;
       cache.hasMtime = true;
       cache.mtime = currentMtime;
-      cache.resolvedPath = p.string();
-      return nullptr;
     }
-    cache.image = std::move(*loaded);
-    cache.valid = true;
-    cache.hasMtime = true;
-    cache.mtime = currentMtime;
-    cache.resolvedPath = p.string();
+
+    if(cache.valid){
+      cache.resolvedPath = resolved.string();
+      return &cache.image;
+    }
   }
-  return cache.valid ? &cache.image : nullptr;
+
+  cache.valid = false;
+  cache.hasMtime = false;
+  cache.resolvedPath.clear();
+  return nullptr;
 }
 
 inline std::vector<std::string> render_terminal_art_lines(const TerminalArtImage& img){

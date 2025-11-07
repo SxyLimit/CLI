@@ -28,8 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-width",
         type=positive_int,
-        default=None,
-        help="Resize the image so that the width does not exceed this value",
+        default=40,
+        help="Resize the image so that the width does not exceed this value (default: 40)",
     )
     parser.add_argument(
         "--max-height",
