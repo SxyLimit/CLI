@@ -2,6 +2,8 @@
 #include "globals.hpp"
 #include <system_error>
 #include <thread>
+#include <cctype>
+#include <sstream>
 
 // ===== Path candidates (inline) =====
 inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind){
@@ -292,20 +294,113 @@ inline ToolSpec make_message(){
 }
 
 // =================== Built-in Tools ===================
+inline const std::vector<std::string>& mycli_ascii_art_template(){
+  static const std::vector<std::string> lines = {
+    R"( __  __       ____ _     ___ )",
+    R"(|  \/  | ___ / ___| |   |_ _|)",
+    R"(| |\/| |/ _ \ |   | |    | | )",
+    R"(| |  | |  __/ |___| |___ | | )",
+    R"(|_|  |_|\___|\____|_____|___|)"
+  };
+  return lines;
+}
+
+inline std::string gradient_line_with_theme(const std::string& line,
+                                            int startR, int startG, int startB,
+                                            int endR, int endG, int endB){
+  int total = 0;
+  for(unsigned char ch : line){
+    if(!std::isspace(static_cast<unsigned char>(ch))) ++total;
+  }
+  if(total == 0){
+    return std::string(ansi::BOLD) + line + ansi::RESET;
+  }
+  std::string out;
+  out.reserve(line.size() * 10);
+  out += ansi::BOLD;
+  int idx = 0;
+  for(char c : line){
+    unsigned char uc = static_cast<unsigned char>(c);
+    if(std::isspace(static_cast<unsigned char>(uc))){
+      out.push_back(c);
+      continue;
+    }
+    double t = (total == 1) ? 0.0 : static_cast<double>(idx) / static_cast<double>(total - 1);
+    int r = static_cast<int>(startR + (endR - startR) * t + 0.5);
+    int g = static_cast<int>(startG + (endG - startG) * t + 0.5);
+    int b = static_cast<int>(startB + (endB - startB) * t + 0.5);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "\x1b[38;2;%d;%d;%dm", r, g, b);
+    out += buf;
+    out.push_back(c);
+    ++idx;
+  }
+  out += ansi::RESET;
+  return out;
+}
+
+inline std::vector<std::string> render_mycli_ascii_art(){
+  const auto& base = mycli_ascii_art_template();
+  std::vector<std::string> colored;
+  colored.reserve(base.size());
+  const std::string theme = g_settings.promptTheme;
+  if(theme == "blue-purple"){
+    for(const auto& line : base){
+      colored.push_back(gradient_line_with_theme(line, 0, 153, 255, 128, 0, 255));
+    }
+  }else{
+    for(const auto& line : base){
+      colored.push_back(std::string(ansi::CYAN) + ansi::BOLD + line + ansi::RESET);
+    }
+  }
+  return colored;
+}
+
 inline ToolSpec make_show(){
-  ToolSpec t; t.name="show"; t.summary="Show system information (setting|logs)";
-  set_tool_summary_locale(t, "en", "Show system information (setting|logs)");
-  set_tool_summary_locale(t, "zh", "显示系统信息（setting|logs）");
+  ToolSpec t; t.name="show"; t.summary="Show system information";
+  set_tool_summary_locale(t, "en", "Show system information");
+  set_tool_summary_locale(t, "zh", "显示系统信息");
   t.subs = {
-    SubcommandSpec{"setting", {}, {}, {}, [](const std::vector<std::string>&){
-      std::cout<<tr("show_setting_output");
+    SubcommandSpec{"LICENSE", {}, {}, {}, [](const std::vector<std::string>&){
+      std::ifstream in("LICENSE");
+      if(!in.good()){
+        std::cout<<tr("show_license_error")<<"\n";
+        return;
+      }
+      std::ostringstream oss;
+      oss << in.rdbuf();
+      if(in.bad()){
+        std::cout<<tr("show_license_error")<<"\n";
+        return;
+      }
+      std::string content = oss.str();
+      if(content.empty()){
+        std::cout<<"\n";
+      }else{
+        std::cout<<content;
+        if(content.back()!='\n') std::cout<<"\n";
+      }
     }},
-    SubcommandSpec{"logs",   {}, {}, {}, [](const std::vector<std::string>&){
-      std::cout<<tr("show_logs_output");
+    SubcommandSpec{"MyCLI", {}, {}, {}, [](const std::vector<std::string>&){
+      std::cout<<tr("show_mycli_version")<<"\n\n";
+      const auto art = render_mycli_ascii_art();
+      for(const auto& line : art){
+        std::cout<<line<<"\n";
+      }
+      std::cout<<std::flush;
     }}
   };
   t.handler = [](const std::vector<std::string>&){
     std::cout<<tr("show_usage")<<"\n";
+  };
+  return t;
+}
+inline ToolSpec make_clear(){
+  ToolSpec t; t.name="clear"; t.summary="Clear the terminal screen";
+  set_tool_summary_locale(t, "en", "Clear the terminal screen");
+  set_tool_summary_locale(t, "zh", "清空终端屏幕");
+  t.handler = [](const std::vector<std::string>&){
+    std::cout << "\x1b[2J\x1b[3J\x1b[Hmycli>" << std::flush;
   };
   return t;
 }
@@ -642,6 +737,7 @@ inline void register_tools_from_config(const std::string& path){
 // =================== Register All ===================
 inline void register_all_tools(){
   REG.registerTool(make_show());
+  REG.registerTool(make_clear());
   REG.registerTool(make_setting());
   REG.registerTool(make_run());
   REG.registerTool(make_llm());
