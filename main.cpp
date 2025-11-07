@@ -15,6 +15,7 @@
 #include <clocale>
 #include <codecvt>
 #include <cwchar>
+#include <fstream>
 #include <locale>
 #include <stdexcept>
 #include <cctype>
@@ -94,6 +95,30 @@ inline void flush_stdout(){
   _commit(_fileno(stdout));
 }
 
+inline bool env_var_exists(const std::string& key){
+  DWORD length = GetEnvironmentVariableA(key.c_str(), nullptr, 0);
+  if(length == 0){
+    DWORD err = GetLastError();
+    return err != ERROR_ENVVAR_NOT_FOUND;
+  }
+  return true;
+}
+
+inline void set_env(const std::string& key, const std::string& value, bool overwrite){
+  if(!overwrite && env_var_exists(key)) return;
+  _putenv_s(key.c_str(), value.c_str());
+}
+
+inline int char_width(wchar_t ch){
+  if(ch == 0) return 0;
+  if(ch < 0x20 || (ch >= 0x7F && ch < 0xA0)) return -1;
+  WORD type = 0;
+  if(GetStringTypeW(CT_CTYPE3, &ch, 1, &type) && (type & C3_FULLWIDTH)){
+    return 2;
+  }
+  return 1;
+}
+
 #else
 
 class TermRaw {
@@ -141,6 +166,18 @@ inline void flush_stdout(){
   ::fsync(STDOUT_FILENO);
 }
 
+inline bool env_var_exists(const std::string& key){
+  return ::getenv(key.c_str()) != nullptr;
+}
+
+inline void set_env(const std::string& key, const std::string& value, bool overwrite){
+  ::setenv(key.c_str(), value.c_str(), overwrite ? 1 : 0);
+}
+
+inline int char_width(wchar_t ch){
+  return ::wcwidth(ch);
+}
+
 #endif
 } // namespace platform
 
@@ -175,8 +212,8 @@ static void load_env_overrides(){
     std::string key = trim_copy(stripped.substr(0, eq));
     std::string value = trim_copy(stripped.substr(eq + 1));
     if(key.empty()) continue;
-    if(::getenv(key.c_str()) == nullptr){
-      ::setenv(key.c_str(), value.c_str(), 0);
+    if(!platform::env_var_exists(key)){
+      platform::set_env(key, value, false);
     }
   }
 }
@@ -547,7 +584,7 @@ bool set_config_home(const std::string& path, std::string& error){
   std::filesystem::path newPath = p;
   std::string newPathStr = newPath.string();
   if(oldPath == newPath){
-    ::setenv("HOME_PATH", newPathStr.c_str(), 1);
+    platform::set_env("HOME_PATH", newPathStr, true);
     persist_home_path_to_env(newPathStr);
     return true;
   }
@@ -580,7 +617,7 @@ bool set_config_home(const std::string& path, std::string& error){
     return false;
   }
   g_config_home = newPathStr;
-  ::setenv("HOME_PATH", newPathStr.c_str(), 1);
+  platform::set_env("HOME_PATH", newPathStr, true);
   persist_home_path_to_env(newPathStr);
   g_llm_watcher.initialized = false;
   g_llm_watcher.path.clear();
@@ -1076,7 +1113,7 @@ static int displayWidth(const std::string& text){
   }
   int width = 0;
   for (wchar_t ch : ws) {
-    int w = ::wcwidth(ch);
+    int w = platform::char_width(ch);
     if (w < 0) w = 1;
     width += w;
   }
