@@ -296,11 +296,11 @@ inline ToolSpec make_message(){
 // =================== Built-in Tools ===================
 inline const std::vector<std::string>& mycli_ascii_art_template(){
   static const std::vector<std::string> lines = {
-    " __  __      ____ _     ___ ",
-    "|  \\/  | ___/ ___| |   |_ _|",
-    "| |\\/| |/ _ \\___ \\ |    | | ",
-    "| |  | |  __/___) | |___| | ",
-    "|_|  |_|\\___|____/|____|___|"
+    R"( __  __       ____ _     ___ )",
+    R"(|  \/  | ___ / ___| |   |_ _|)",
+    R"(| |\/| |/ _ \ |   | |    | | )",
+    R"(| |  | |  __/ |___| |___ | | )",
+    R"(|_|  |_|\___|\____|_____|___|)"
   };
   return lines;
 }
@@ -361,12 +361,6 @@ inline ToolSpec make_show(){
   set_tool_summary_locale(t, "en", "Show system information");
   set_tool_summary_locale(t, "zh", "显示系统信息");
   t.subs = {
-    SubcommandSpec{"setting", {}, {}, {}, [](const std::vector<std::string>&){
-      std::cout<<tr("show_setting_output");
-    }},
-    SubcommandSpec{"logs",   {}, {}, {}, [](const std::vector<std::string>&){
-      std::cout<<tr("show_logs_output");
-    }},
     SubcommandSpec{"LICENSE", {}, {}, {}, [](const std::vector<std::string>&){
       std::ifstream in("LICENSE");
       if(!in.good()){
@@ -406,7 +400,7 @@ inline ToolSpec make_clear(){
   set_tool_summary_locale(t, "en", "Clear the terminal screen");
   set_tool_summary_locale(t, "zh", "清空终端屏幕");
   t.handler = [](const std::vector<std::string>&){
-    std::cout << "\x1b[2J\x1b[H" << std::flush;
+    std::cout << "\x1b[2J\x1b[3J\x1b[Hmycli>" << std::flush;
   };
   return t;
 }
