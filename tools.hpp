@@ -1,5 +1,6 @@
 #pragma once
 #include "globals.hpp"
+#include "tools/git.hpp"
 #include <system_error>
 #include <thread>
 
@@ -638,7 +639,7 @@ inline void register_all_tools(){
   REG.registerTool(make_run());
   REG.registerTool(make_llm());
   REG.registerTool(make_message());
-  // git 从配置加载
+  REG.registerTool(make_git());
   REG.registerTool(make_cd());
   REG.registerTool(make_ls());
   REG.registerTool(make_cat());
