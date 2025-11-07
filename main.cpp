@@ -765,6 +765,78 @@ static PathCompletionContext analyzePositionalPathContext(const std::vector<std:
   return ctx;
 }
 
+struct PositionalArgumentContext {
+  bool active = false;
+  size_t index = 0;
+  std::string placeholder;
+  bool currentWord = false;
+};
+
+static std::optional<std::string> positionalPlaceholderAt(const std::vector<std::string>& posDefs, size_t idx){
+  if(posDefs.empty()) return std::nullopt;
+  if(idx < posDefs.size()) return posDefs[idx];
+  const std::string& last = posDefs.back();
+  if(last.find("...") != std::string::npos) return last;
+  return std::nullopt;
+}
+
+static PositionalArgumentContext analyzePositionalArgumentContext(const std::vector<std::string>& posDefs,
+                                                                 size_t startIdx,
+                                                                 const std::vector<OptionSpec>& opts,
+                                                                 const std::vector<std::string>& toks,
+                                                                 const SplitWord& sw,
+                                                                 const std::string& buf){
+  PositionalArgumentContext ctx;
+  bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
+  size_t i = startIdx;
+  size_t posFilled = 0;
+  while(i < toks.size()){
+    const std::string& tk = toks[i];
+    if(!tk.empty() && tk[0]=='-'){
+      bool takes = false;
+      size_t advance = 1;
+      for(auto &o : opts){
+        if(o.name == tk){
+          takes = o.takesValue;
+          if(takes && i + 1 < toks.size()){
+            bool valueIsCurrent = (!trailingSpace && i + 1 == toks.size() - 1 && toks.back() == sw.word);
+            if(valueIsCurrent){
+              return ctx;
+            }
+            advance = 2;
+          }
+          break;
+        }
+      }
+      i += advance;
+      continue;
+    }
+
+    bool isCurrent = (!trailingSpace && i == toks.size() - 1 && tk == sw.word);
+    if(isCurrent){
+      if(auto ph = positionalPlaceholderAt(posDefs, posFilled)){ 
+        ctx.active = true;
+        ctx.index = posFilled;
+        ctx.placeholder = *ph;
+        ctx.currentWord = true;
+      }
+      return ctx;
+    }
+    posFilled += 1;
+    i += 1;
+  }
+
+  if(trailingSpace){
+    if(auto ph = positionalPlaceholderAt(posDefs, posFilled)){
+      ctx.active = true;
+      ctx.index = posFilled;
+      ctx.placeholder = *ph;
+      ctx.currentWord = false;
+    }
+  }
+  return ctx;
+}
+
 static bool inSubcommandSlot(const ToolSpec& spec, const std::vector<std::string>& toks){
   if (spec.subs.empty()) return false;
   if (toks.size()==1) return true;
@@ -888,6 +960,32 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
         out.annotations.push_back(annotation);
       }
       if(!out.items.empty()) return out;
+    }
+  }
+
+  if(spec.name == "git" && sub){
+    std::vector<OptionSpec> combinedOpts = spec.options;
+    combinedOpts.insert(combinedOpts.end(), sub->options.begin(), sub->options.end());
+    auto posCtx = analyzePositionalArgumentContext(sub->positional, /*startIdx*/2, combinedOpts, toks, sw, buf);
+    if(posCtx.active){
+      std::string lower = posCtx.placeholder;
+      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+      bool wantsBranch = (lower.find("branch") != std::string::npos || lower.find("upstream") != std::string::npos);
+      if(!wantsBranch && sub->name == "branch" && posCtx.index == 0){
+        wantsBranch = true;
+      }
+      if(wantsBranch){
+        auto branches = git_collect_branch_names();
+        for(const auto& name : branches){
+          MatchResult match = compute_match(name, sw.word);
+          if(!match.matched) continue;
+          out.items.push_back(sw.before + name);
+          out.labels.push_back(name);
+          out.matchPositions.push_back(match.positions);
+          out.annotations.push_back("");
+        }
+        if(!out.items.empty()) return out;
+      }
     }
   }
 

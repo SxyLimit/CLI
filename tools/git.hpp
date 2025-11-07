@@ -1,7 +1,48 @@
 #pragma once
 
 #include "../globals.hpp"
+#include <array>
+#include <cctype>
+#include <set>
 #include <utility>
+
+inline std::string git_trim_copy(const std::string& s){
+  size_t a = 0, b = s.size();
+  while(a < b && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+  while(b > a && std::isspace(static_cast<unsigned char>(s[b-1]))) --b;
+  return s.substr(a, b - a);
+}
+
+inline std::vector<std::string> git_collect_branch_names(){
+  auto runCommand = [](const std::string& cmd, bool parseLegacyOutput){
+    std::set<std::string> unique;
+    FILE* pipe = ::popen(cmd.c_str(), "r");
+    if(!pipe) return std::vector<std::string>{};
+    std::array<char, 512> buf{};
+    while(fgets(buf.data(), static_cast<int>(buf.size()), pipe)){
+      std::string line = buf.data();
+      while(!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+      if(parseLegacyOutput){
+        if(!line.empty() && line[0] == '*') line.erase(line.begin());
+        line = git_trim_copy(line);
+        auto arrow = line.find("->");
+        if(arrow != std::string::npos){
+          line = git_trim_copy(line.substr(0, arrow));
+        }
+      }else{
+        line = git_trim_copy(line);
+      }
+      if(line.empty()) continue;
+      unique.insert(std::move(line));
+    }
+    ::pclose(pipe);
+    return std::vector<std::string>(unique.begin(), unique.end());
+  };
+
+  auto formatted = runCommand("git branch -a --format='%(refname:short)'", /*parseLegacyOutput*/false);
+  if(!formatted.empty()) return formatted;
+  return runCommand("git branch -a", /*parseLegacyOutput*/true);
+}
 
 inline OptionSpec gitFlag(const std::string& name){
   OptionSpec opt;
@@ -92,7 +133,11 @@ inline ToolSpec make_git(){
       "clone",
       {
         gitValueOption("--depth", {"1","10","50"}, "<depth>"),
-        gitValueOption("--branch", {}, "<branch>"),
+        [](){
+          OptionSpec opt = gitValueOption("--branch", {}, "<branch>");
+          opt.dynamicValues = [](const std::vector<std::string>&){ return git_collect_branch_names(); };
+          return opt;
+        }(),
         gitFlag("--recursive")
       },
       {"<repo>", "[<dir>]"},
