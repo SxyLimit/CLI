@@ -104,7 +104,9 @@ const std::string& settings_file_path(){
 static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18n = {
   {"show_setting_output", {{"en", "theme = default\nmodel = alpha\n"}, {"zh", "主题 = default\n模型 = alpha\n"}}},
   {"show_logs_output",   {{"en", "3 fake log lines...\n2 fake log lines...\n1 fake log line...\n"}, {"zh", "3 行模拟日志...\n2 行模拟日志...\n1 行模拟日志...\n"}}},
-  {"show_usage",         {{"en", "usage: show [setting|logs]"}, {"zh", "用法：show [setting|logs]"}}},
+  {"show_usage",         {{"en", "usage: show [setting|logs|LICENSE|MyCLI]"}, {"zh", "用法：show [setting|logs|LICENSE|MyCLI]"}}},
+  {"show_license_error", {{"en", "Failed to read LICENSE file."}, {"zh", "读取 LICENSE 文件失败。"}}},
+  {"show_mycli_version", {{"en", "CLI Demo v0.0.1"}, {"zh", "CLI 演示 v0.0.1"}}},
   {"setting_get_usage",   {{"en", "usage: setting get <key>"}, {"zh", "用法：setting get <key>"}}},
   {"setting_unknown_key", {{"en", "unknown setting key: {key}"}, {"zh", "未知设置项：{key}"}}},
   {"setting_get_value",   {{"en", "setting {key} = {value}"}, {"zh", "设置 {key} = {value}"}}},
