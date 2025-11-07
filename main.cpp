@@ -1,6 +1,12 @@
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+#else
 #include <termios.h>
 #include <unistd.h>
 #include <poll.h>
+#endif
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
@@ -9,6 +15,7 @@
 #include <clocale>
 #include <codecvt>
 #include <cwchar>
+#include <fstream>
 #include <locale>
 #include <stdexcept>
 #include <cctype>
@@ -28,6 +35,151 @@
 #include "globals.hpp"
 #include "tools.hpp"
 #include "settings.hpp"
+
+namespace platform {
+#ifdef _WIN32
+
+class TermRaw {
+  HANDLE hIn = INVALID_HANDLE_VALUE;
+  DWORD origMode = 0;
+  bool active = false;
+public:
+  void enable(){
+    hIn = GetStdHandle(STD_INPUT_HANDLE);
+    if(hIn == INVALID_HANDLE_VALUE) std::exit(1);
+    if(!GetConsoleMode(hIn, &origMode)) std::exit(1);
+    DWORD mode = origMode;
+    mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
+    mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+    if(!SetConsoleMode(hIn, mode)) std::exit(1);
+    active = true;
+  }
+  void disable(){
+    if(active){
+      SetConsoleMode(hIn, origMode);
+      active = false;
+    }
+  }
+  ~TermRaw(){ disable(); }
+};
+
+inline void ensure_virtual_terminal_output(){
+  HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+  if(hOut == INVALID_HANDLE_VALUE) return;
+  DWORD mode = 0;
+  if(!GetConsoleMode(hOut, &mode)) return;
+  mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+  SetConsoleMode(hOut, mode);
+}
+
+inline int wait_for_input(int timeout_ms){
+  HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+  DWORD rc = WaitForSingleObject(hIn, timeout_ms < 0 ? INFINITE : static_cast<DWORD>(timeout_ms));
+  if(rc == WAIT_TIMEOUT) return 0;
+  if(rc == WAIT_OBJECT_0) return 1;
+  return -1;
+}
+
+inline bool read_char(char &ch){
+  DWORD read = 0;
+  if(!ReadFile(GetStdHandle(STD_INPUT_HANDLE), &ch, 1, &read, nullptr)) return false;
+  return read == 1;
+}
+
+inline void write_stdout(const char* data, size_t len){
+  DWORD written = 0;
+  WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), data, static_cast<DWORD>(len), &written, nullptr);
+}
+
+inline void flush_stdout(){
+  _commit(_fileno(stdout));
+}
+
+inline bool env_var_exists(const std::string& key){
+  DWORD length = GetEnvironmentVariableA(key.c_str(), nullptr, 0);
+  if(length == 0){
+    DWORD err = GetLastError();
+    return err != ERROR_ENVVAR_NOT_FOUND;
+  }
+  return true;
+}
+
+inline void set_env(const std::string& key, const std::string& value, bool overwrite){
+  if(!overwrite && env_var_exists(key)) return;
+  _putenv_s(key.c_str(), value.c_str());
+}
+
+inline int char_width(wchar_t ch){
+  if(ch == 0) return 0;
+  if(ch < 0x20 || (ch >= 0x7F && ch < 0xA0)) return -1;
+  WORD type = 0;
+  if(GetStringTypeW(CT_CTYPE3, &ch, 1, &type) && (type & C3_FULLWIDTH)){
+    return 2;
+  }
+  return 1;
+}
+
+#else
+
+class TermRaw {
+  termios orig{};
+  bool active = false;
+public:
+  void enable(){
+    if(tcgetattr(STDIN_FILENO, &orig) == -1) std::exit(1);
+    termios raw = orig;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) std::exit(1);
+    active = true;
+  }
+  void disable(){
+    if(active){
+      tcsetattr(STDIN_FILENO, TCSANOW, &orig);
+      active = false;
+    }
+  }
+  ~TermRaw(){ disable(); }
+};
+
+inline void ensure_virtual_terminal_output(){}
+
+inline int wait_for_input(int timeout_ms){
+  struct pollfd pfd{STDIN_FILENO, POLLIN, 0};
+  int rc = ::poll(&pfd, 1, timeout_ms);
+  if(rc <= 0) return rc;
+  if(!(pfd.revents & POLLIN)) return 0;
+  return 1;
+}
+
+inline bool read_char(char &ch){
+  ssize_t n = ::read(STDIN_FILENO, &ch, 1);
+  return n == 1;
+}
+
+inline void write_stdout(const char* data, size_t len){
+  ::write(STDOUT_FILENO, data, len);
+}
+
+inline void flush_stdout(){
+  ::fsync(STDOUT_FILENO);
+}
+
+inline bool env_var_exists(const std::string& key){
+  return ::getenv(key.c_str()) != nullptr;
+}
+
+inline void set_env(const std::string& key, const std::string& value, bool overwrite){
+  ::setenv(key.c_str(), value.c_str(), overwrite ? 1 : 0);
+}
+
+inline int char_width(wchar_t ch){
+  return ::wcwidth(ch);
+}
+
+#endif
+} // namespace platform
 
 // ===== Global state definitions =====
 ToolRegistry REG;
@@ -60,8 +212,8 @@ static void load_env_overrides(){
     std::string key = trim_copy(stripped.substr(0, eq));
     std::string value = trim_copy(stripped.substr(eq + 1));
     if(key.empty()) continue;
-    if(::getenv(key.c_str()) == nullptr){
-      ::setenv(key.c_str(), value.c_str(), 0);
+    if(!platform::env_var_exists(key)){
+      platform::set_env(key, value, false);
     }
   }
 }
@@ -432,7 +584,7 @@ bool set_config_home(const std::string& path, std::string& error){
   std::filesystem::path newPath = p;
   std::string newPathStr = newPath.string();
   if(oldPath == newPath){
-    ::setenv("HOME_PATH", newPathStr.c_str(), 1);
+    platform::set_env("HOME_PATH", newPathStr, true);
     persist_home_path_to_env(newPathStr);
     return true;
   }
@@ -465,7 +617,7 @@ bool set_config_home(const std::string& path, std::string& error){
     return false;
   }
   g_config_home = newPathStr;
-  ::setenv("HOME_PATH", newPathStr.c_str(), 1);
+  platform::set_env("HOME_PATH", newPathStr, true);
   persist_home_path_to_env(newPathStr);
   g_llm_watcher.initialized = false;
   g_llm_watcher.path.clear();
@@ -961,7 +1113,7 @@ static int displayWidth(const std::string& text){
   }
   int width = 0;
   for (wchar_t ch : ws) {
-    int w = ::wcwidth(ch);
+    int w = platform::char_width(ch);
     if (w < 0) w = 1;
     width += w;
   }
@@ -1673,20 +1825,23 @@ int main(){
   register_tools_from_config(conf);
 
   // 3) 退出时回车复位
-  std::atexit([](){ ::write(STDOUT_FILENO, "\r\n", 2); ::fsync(STDOUT_FILENO); });
-  std::signal(SIGINT,  [](int){ ::write(STDOUT_FILENO, "\r\n", 2); ::_exit(128); });
-  std::signal(SIGTERM, [](int){ ::write(STDOUT_FILENO, "\r\n", 2); ::_exit(128); });
-  std::signal(SIGHUP,  [](int){ ::write(STDOUT_FILENO, "\r\n", 2); ::_exit(128); });
-  std::signal(SIGQUIT, [](int){ ::write(STDOUT_FILENO, "\r\n", 2); ::_exit(128); });
+  std::atexit([](){ platform::write_stdout("\r\n", 2); platform::flush_stdout(); });
+#ifdef SIGINT
+  std::signal(SIGINT,  [](int){ platform::write_stdout("\r\n", 2); std::_Exit(128); });
+#endif
+#ifdef SIGTERM
+  std::signal(SIGTERM, [](int){ platform::write_stdout("\r\n", 2); std::_Exit(128); });
+#endif
+#ifdef SIGHUP
+  std::signal(SIGHUP,  [](int){ platform::write_stdout("\r\n", 2); std::_Exit(128); });
+#endif
+#ifdef SIGQUIT
+  std::signal(SIGQUIT, [](int){ platform::write_stdout("\r\n", 2); std::_Exit(128); });
+#endif
 
   // 4) 原始模式（最小化）
-  struct TermRaw { termios orig{}; bool active=false;
-    void enable(){ if(tcgetattr(STDIN_FILENO,&orig)==-1) std::exit(1);
-      termios raw=orig; raw.c_lflag&=~(ECHO|ICANON); raw.c_cc[VMIN]=1; raw.c_cc[VTIME]=0;
-      if(tcsetattr(STDIN_FILENO,TCSAFLUSH,&raw)==-1) std::exit(1); active=true; }
-    void disable(){ if(active){ tcsetattr(STDIN_FILENO,TCSANOW,&orig); active=false; } }
-    ~TermRaw(){ disable(); }
-  } term; term.enable();
+  platform::ensure_virtual_terminal_output();
+  platform::TermRaw term; term.enable();
 
   std::string buf;
   int sel = 0;
@@ -1777,8 +1932,7 @@ int main(){
       renderFrame();
     }
 
-    struct pollfd pfd{STDIN_FILENO, POLLIN, 0};
-    int rc = ::poll(&pfd, 1, 200);
+    int rc = platform::wait_for_input(200);
     if(rc == 0){
       bool beforeMsg = lastMessageUnread;
       bool beforeLlm = lastLlmUnread;
@@ -1794,15 +1948,13 @@ int main(){
       continue;
     }
     if(rc < 0){
+#ifndef _WIN32
       if(errno == EINTR) continue;
+#endif
       break;
     }
-    if(!(pfd.revents & POLLIN)){
-      continue;
-    }
     char ch;
-    ssize_t n = ::read(STDIN_FILENO, &ch, 1);
-    if(n <= 0) break;
+    if(!platform::read_char(ch)) break;
 
     if(ch=='\n' || ch=='\r'){
       std::cout << "\n";
@@ -1840,8 +1992,8 @@ int main(){
     }
     if(ch=='\x1b'){
       char seq[2];
-      if(::read(STDIN_FILENO,&seq[0],1)<=0) continue;
-      if(::read(STDIN_FILENO,&seq[1],1)<=0) continue;
+      if(!platform::read_char(seq[0])) continue;
+      if(!platform::read_char(seq[1])) continue;
       if(seq[0]=='['){
         if(seq[1]=='A'){
           if(haveCand && total>0){
@@ -1865,6 +2017,6 @@ int main(){
     }
   }
 
-  ::write(STDOUT_FILENO, "\r\n", 2); ::fsync(STDOUT_FILENO);
+  platform::write_stdout("\r\n", 2); platform::flush_stdout();
   return 0;
 }
