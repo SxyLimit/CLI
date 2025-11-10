@@ -148,7 +148,7 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
       }else if(key=="prompt.name"){
         // no predefined suggestions
       }else if(key=="prompt.input_ellipsis.left_width" || key=="prompt.input_ellipsis.right_width"){
-        out = {"20", "30", "40", "60"};
+        out = {"20", "30", "50", "60"};
       }
       break;
   }

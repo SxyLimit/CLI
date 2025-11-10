@@ -1668,16 +1668,15 @@ static WindowEllipsisResult applyWindowEllipsis(const std::vector<EllipsisSegmen
   }
 
   int widthBeforeCursor = widthPrefix[cursorIndex];
-  int widthAfterCursor = widthPrefix[totalGlyphs] - widthBeforeCursor;
 
   bool limitLeft = leftWidth >= 0;
-  bool limitRight = rightWidth >= 0;
+  bool limitTotal = rightWidth >= 0;
+  bool leftTrimmedByLimit = false;
 
-  size_t leftKeepStart = 0;
+  size_t visibleStart = 0;
   if(limitLeft && widthBeforeCursor > leftWidth){
-    result.leftApplied = true;
+    leftTrimmedByLimit = true;
     int dotWidth = std::min(3, std::max(0, leftWidth));
-    result.leftDotWidth = dotWidth;
     int allowedWidth = std::max(0, leftWidth - dotWidth);
     size_t idx = cursorIndex;
     int keptWidth = 0;
@@ -1690,41 +1689,105 @@ static WindowEllipsisResult applyWindowEllipsis(const std::vector<EllipsisSegmen
       keptWidth += w;
       idx = candidate;
     }
-    leftKeepStart = idx;
-  }else{
-    leftKeepStart = 0;
-    result.leftDotWidth = 0;
+    visibleStart = idx;
   }
+  if(visibleStart > cursorIndex) visibleStart = cursorIndex;
 
-  size_t rightKeepEnd = totalGlyphs;
-  if(limitRight && widthAfterCursor > rightWidth){
-    result.rightApplied = true;
-    int dotWidth = std::min(3, std::max(0, rightWidth));
-    result.rightDotWidth = dotWidth;
-    int allowedWidth = std::max(0, rightWidth - dotWidth);
-    size_t idx = cursorIndex;
-    int keptWidth = 0;
-    while(idx < totalGlyphs){
-      int w = glyphs[idx].glyph.width;
-      if(keptWidth + w > allowedWidth){
-        break;
-      }
-      keptWidth += w;
-      idx += 1;
+  auto widthBetween = [&](size_t a, size_t b)->int{
+    if(b < a) std::swap(a, b);
+    return widthPrefix[b] - widthPrefix[a];
+  };
+
+  auto computeLeftDots = [&](size_t start)->int{
+    if(start == 0) return 0;
+    int dots = leftTrimmedByLimit ? std::min(3, std::max(0, leftWidth)) : 3;
+    if(limitTotal){
+      dots = std::min(dots, std::max(0, rightWidth));
     }
-    rightKeepEnd = idx;
-  }else{
-    rightKeepEnd = totalGlyphs;
-    result.rightDotWidth = 0;
+    return std::max(0, dots);
+  };
+
+  auto recomputeLeft = [&](){
+    result.leftApplied = (visibleStart > 0);
+    result.leftDotWidth = result.leftApplied ? computeLeftDots(visibleStart) : 0;
+  };
+
+  recomputeLeft();
+
+  if(limitTotal){
+    int totalLimit = std::max(0, rightWidth);
+    auto ensureLeftWithinTotal = [&](){
+      while(visibleStart < cursorIndex){
+        recomputeLeft();
+        int available = totalLimit - result.leftDotWidth;
+        if(available < 0) available = 0;
+        if(widthBetween(visibleStart, cursorIndex) <= available) break;
+        visibleStart += 1;
+      }
+      recomputeLeft();
+    };
+
+    auto ensureLeftWithinContent = [&](int rightDots){
+      while(visibleStart < cursorIndex){
+        recomputeLeft();
+        int available = totalLimit - result.leftDotWidth - rightDots;
+        if(available < 0) available = 0;
+        if(widthBetween(visibleStart, cursorIndex) <= available) break;
+        visibleStart += 1;
+      }
+      recomputeLeft();
+    };
+
+    ensureLeftWithinTotal();
+
+    int availableWithoutRightDots = totalLimit - result.leftDotWidth;
+    if(availableWithoutRightDots < 0) availableWithoutRightDots = 0;
+
+    size_t visibleEnd = totalGlyphs;
+    if(widthBetween(visibleStart, totalGlyphs) > availableWithoutRightDots){
+      result.rightApplied = true;
+      result.rightDotWidth = std::min(3, std::max(0, totalLimit - result.leftDotWidth));
+      ensureLeftWithinContent(result.rightDotWidth);
+      int contentLimit = totalLimit - result.leftDotWidth - result.rightDotWidth;
+      if(contentLimit < 0) contentLimit = 0;
+      size_t idx = cursorIndex;
+      int keptWidth = widthBetween(visibleStart, cursorIndex);
+      while(idx < totalGlyphs){
+        int w = glyphs[idx].glyph.width;
+        if(keptWidth + w > contentLimit){
+          break;
+        }
+        keptWidth += w;
+        idx += 1;
+      }
+      visibleEnd = idx;
+    }else{
+      result.rightApplied = false;
+      result.rightDotWidth = 0;
+      visibleEnd = totalGlyphs;
+    }
+
+    if(visibleEnd < cursorIndex) visibleEnd = cursorIndex;
+    if(visibleStart > visibleEnd) visibleStart = visibleEnd;
+
+    result.leftKeptWidth = widthBetween(visibleStart, cursorIndex);
+
+    for(size_t idx = visibleStart; idx < visibleEnd && idx < totalGlyphs; ++idx){
+      const auto& ref = glyphs[idx];
+      if(result.firstGlyphIndex[ref.segment] == std::numeric_limits<size_t>::max()){
+        result.firstGlyphIndex[ref.segment] = ref.glyphIndex;
+      }
+      result.trimmedTexts[ref.segment] += ref.glyph.bytes;
+      result.trimmedGlyphCounts[ref.segment] += 1;
+    }
+
+    return result;
   }
 
-  if(leftKeepStart > cursorIndex) leftKeepStart = cursorIndex;
-  if(rightKeepEnd < cursorIndex) rightKeepEnd = cursorIndex;
-  if(leftKeepStart > rightKeepEnd) leftKeepStart = rightKeepEnd;
+  size_t visibleEnd = totalGlyphs;
+  result.leftKeptWidth = widthBetween(visibleStart, cursorIndex);
 
-  result.leftKeptWidth = widthPrefix[cursorIndex] - widthPrefix[leftKeepStart];
-
-  for(size_t idx = leftKeepStart; idx < rightKeepEnd && idx < totalGlyphs; ++idx){
+  for(size_t idx = visibleStart; idx < visibleEnd && idx < totalGlyphs; ++idx){
     const auto& ref = glyphs[idx];
     if(result.firstGlyphIndex[ref.segment] == std::numeric_limits<size_t>::max()){
       result.firstGlyphIndex[ref.segment] = ref.glyphIndex;
@@ -1734,21 +1797,6 @@ static WindowEllipsisResult applyWindowEllipsis(const std::vector<EllipsisSegmen
   }
 
   return result;
-}
-
-static std::vector<int> adjustMatchPositions(const std::vector<int>& original,
-                                             size_t firstGlyphIndex,
-                                             int keptGlyphs){
-  std::vector<int> adjusted;
-  if(firstGlyphIndex == std::numeric_limits<size_t>::max() || keptGlyphs <= 0) return adjusted;
-  int start = static_cast<int>(firstGlyphIndex);
-  int end = start + keptGlyphs;
-  for(int pos : original){
-    if(pos < start) continue;
-    if(pos >= end) break;
-    adjusted.push_back(pos - start);
-  }
-  return adjusted;
 }
 
 static int promptDisplayWidth(){
@@ -2363,7 +2411,7 @@ static void renderInputWithGhost(const std::string& status, int status_len,
     if(segments[i].role == EllipsisSegmentRole::Ghost){
       std::cout << ansi::GRAY << trimmed << ansi::RESET;
     }else{
-      std::cout << ansi::WHITE << trimmed << ansi::RESET;
+      std::cout << ansi::GRAY << trimmed << ansi::RESET;
     }
   }
 
@@ -2617,9 +2665,33 @@ int main(){
       }
     }else if(showInlineSuggestion){
       const std::string& label = cand.labels[sel];
-      segments.push_back(EllipsisSegment{EllipsisSegmentRole::InlineSuggestion, label, cand.matchPositions[sel]});
+      const auto& matches = cand.matchPositions[sel];
+      auto labelGlyphs = utf8Glyphs(label);
+      size_t suggestionCursorGlyph = std::min(wordPrefixGlyphCount, labelGlyphs.size());
+      if(wordPrefixGlyphCount > 0 && !matches.empty()){
+        size_t matchIdx = 0;
+        size_t matchedGlyphs = 0;
+        size_t glyphIdx = 0;
+        size_t byteIndex = 0;
+        while(glyphIdx < labelGlyphs.size()){
+          if(matchIdx < matches.size() && matches[matchIdx] == static_cast<int>(byteIndex)){
+            matchedGlyphs += 1;
+            matchIdx += 1;
+            if(matchedGlyphs == wordPrefixGlyphCount){
+              suggestionCursorGlyph = glyphIdx + 1;
+              break;
+            }
+          }
+          byteIndex += labelGlyphs[glyphIdx].bytes.size();
+          glyphIdx += 1;
+        }
+        if(matchedGlyphs < wordPrefixGlyphCount){
+          suggestionCursorGlyph = std::min(wordPrefixGlyphCount, labelGlyphs.size());
+        }
+      }
+      segments.push_back(EllipsisSegment{EllipsisSegmentRole::InlineSuggestion, label, matches});
       cursorSegmentIndex = segments.size() - 1;
-      cursorGlyphIndex = wordPrefixGlyphCount;
+      cursorGlyphIndex = suggestionCursorGlyph;
       if(!annotation.empty()){
         segments.push_back(EllipsisSegment{EllipsisSegmentRole::Annotation, " " + annotation, {}});
       }
@@ -2665,13 +2737,11 @@ int main(){
       switch(seg.role){
         case EllipsisSegmentRole::Buffer:{
           bool isErrorWord = pathError && i == pathErrorSegmentIndex;
-          std::cout << (isErrorWord ? ansi::RED : ansi::WHITE) << trimmed << ansi::RESET;
+          std::cout << (isErrorWord ? ansi::RED : ansi::GRAY) << trimmed << ansi::RESET;
           break;
         }
         case EllipsisSegmentRole::InlineSuggestion:{
-          auto matches = adjustMatchPositions(seg.matches, view.firstGlyphIndex[i], view.trimmedGlyphCounts[i]);
-          std::string rendered = renderHighlightedLabel(trimmed, matches);
-          std::cout << rendered;
+          std::cout << ansi::GRAY << trimmed << ansi::RESET;
           break;
         }
         case EllipsisSegmentRole::Annotation:

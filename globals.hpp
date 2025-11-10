@@ -232,7 +232,7 @@ struct AppSettings {
   std::map<std::string, std::string> promptThemeArtPaths;
   bool promptInputEllipsisEnabled = false;
   int  promptInputEllipsisLeftWidth = 30;
-  int  promptInputEllipsisRightWidth = 30;
+  int  promptInputEllipsisRightWidth = 50;
   std::string configHome;
 };
 
