@@ -1662,78 +1662,67 @@ static WindowEllipsisResult applyWindowEllipsis(const std::vector<EllipsisSegmen
   }
   if(cursorIndex > totalGlyphs) cursorIndex = totalGlyphs;
 
+  std::vector<int> widthPrefix(totalGlyphs + 1, 0);
+  for(size_t i = 0; i < totalGlyphs; ++i){
+    widthPrefix[i + 1] = widthPrefix[i] + glyphs[i].glyph.width;
+  }
+
+  int widthBeforeCursor = widthPrefix[cursorIndex];
+  int widthAfterCursor = widthPrefix[totalGlyphs] - widthBeforeCursor;
+
   bool limitLeft = leftWidth >= 0;
   bool limitRight = rightWidth >= 0;
 
   size_t leftKeepStart = 0;
-  if(limitLeft){
-    leftKeepStart = cursorIndex;
+  if(limitLeft && widthBeforeCursor > leftWidth){
+    result.leftApplied = true;
+    int dotWidth = std::min(3, std::max(0, leftWidth));
+    result.leftDotWidth = dotWidth;
+    int allowedWidth = std::max(0, leftWidth - dotWidth);
     size_t idx = cursorIndex;
+    int keptWidth = 0;
     while(idx > 0){
       size_t candidate = idx - 1;
       int w = glyphs[candidate].glyph.width;
-      if(result.leftKeptWidth + w > leftWidth){
-        if(leftKeepStart == cursorIndex){
-          leftKeepStart = candidate;
-          result.leftKeptWidth += w;
-        }
+      if(keptWidth + w > allowedWidth){
         break;
       }
-      result.leftKeptWidth += w;
-      leftKeepStart = candidate;
+      keptWidth += w;
       idx = candidate;
     }
-    if(leftKeepStart > 0){
-      result.leftApplied = true;
-    }
+    leftKeepStart = idx;
   }else{
     leftKeepStart = 0;
+    result.leftDotWidth = 0;
   }
 
   size_t rightKeepEnd = totalGlyphs;
-  int rightKeptWidth = 0;
-  if(limitRight){
-    rightKeepEnd = cursorIndex;
+  if(limitRight && widthAfterCursor > rightWidth){
+    result.rightApplied = true;
+    int dotWidth = std::min(3, std::max(0, rightWidth));
+    result.rightDotWidth = dotWidth;
+    int allowedWidth = std::max(0, rightWidth - dotWidth);
     size_t idx = cursorIndex;
+    int keptWidth = 0;
     while(idx < totalGlyphs){
       int w = glyphs[idx].glyph.width;
-      if(rightKeptWidth + w > rightWidth){
-        if(rightKeepEnd == cursorIndex){
-          rightKeepEnd = idx + 1;
-          rightKeptWidth += w;
-        }
+      if(keptWidth + w > allowedWidth){
         break;
       }
-      rightKeptWidth += w;
-      rightKeepEnd = idx + 1;
-      idx++;
+      keptWidth += w;
+      idx += 1;
     }
-    if(rightKeepEnd < totalGlyphs){
-      result.rightApplied = true;
-    }
+    rightKeepEnd = idx;
   }else{
     rightKeepEnd = totalGlyphs;
+    result.rightDotWidth = 0;
   }
 
   if(leftKeepStart > cursorIndex) leftKeepStart = cursorIndex;
   if(rightKeepEnd < cursorIndex) rightKeepEnd = cursorIndex;
+  if(leftKeepStart > rightKeepEnd) leftKeepStart = rightKeepEnd;
 
-  result.leftKeptWidth = 0;
-  for(size_t idx = leftKeepStart; idx < cursorIndex && idx < totalGlyphs; ++idx){
-    result.leftKeptWidth += glyphs[idx].glyph.width;
-  }
-
-  rightKeptWidth = 0;
-  for(size_t idx = cursorIndex; idx < rightKeepEnd && idx < totalGlyphs; ++idx){
-    rightKeptWidth += glyphs[idx].glyph.width;
-  }
-
-  if(result.leftApplied && limitLeft){
-    result.leftDotWidth = std::max(0, leftWidth - result.leftKeptWidth);
-  }
-  if(result.rightApplied && limitRight){
-    result.rightDotWidth = std::max(0, rightWidth - rightKeptWidth);
-  }
+  result.leftKeptWidth = widthPrefix[cursorIndex] - widthPrefix[leftKeepStart];
 
   for(size_t idx = leftKeepStart; idx < rightKeepEnd && idx < totalGlyphs; ++idx){
     const auto& ref = glyphs[idx];
@@ -2363,10 +2352,9 @@ static void renderInputWithGhost(const std::string& status, int status_len,
   auto view = applyWindowEllipsis(segments, cursor, leftLimit, rightLimit);
 
   int printedLeftDots = 0;
-  if(view.leftApplied){
+  if(view.leftApplied && view.leftDotWidth > 0){
     printedLeftDots = view.leftDotWidth;
-    if(printedLeftDots <= 0) printedLeftDots = 1;
-    std::cout << ansi::WHITE << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
+    std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
   }
 
   for(size_t i=0;i<segments.size();++i){
@@ -2380,10 +2368,9 @@ static void renderInputWithGhost(const std::string& status, int status_len,
   }
 
   int printedRightDots = 0;
-  if(view.rightApplied){
+  if(view.rightApplied && view.rightDotWidth > 0){
     printedRightDots = view.rightDotWidth;
-    if(printedRightDots <= 0) printedRightDots = 1;
-    std::cout << ansi::WHITE << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
+    std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
   }
 
   std::cout.flush();
@@ -2666,10 +2653,9 @@ int main(){
                                     leftLimit, rightLimit);
 
     int printedLeftDots = 0;
-    if(view.leftApplied){
+    if(view.leftApplied && view.leftDotWidth > 0){
       printedLeftDots = view.leftDotWidth;
-      if(printedLeftDots <= 0) printedLeftDots = 1;
-      std::cout << ansi::WHITE << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
+      std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
     }
 
     for(size_t i = 0; i < segments.size(); ++i){
@@ -2701,10 +2687,9 @@ int main(){
     }
 
     int printedRightDots = 0;
-    if(view.rightApplied){
+    if(view.rightApplied && view.rightDotWidth > 0){
       printedRightDots = view.rightDotWidth;
-      if(printedRightDots <= 0) printedRightDots = 1;
-      std::cout << ansi::WHITE << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
+      std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
     }
 
     std::cout.flush();
@@ -2831,6 +2816,47 @@ int main(){
       }
       continue;
     }
+#ifdef _WIN32
+    if(static_cast<unsigned char>(ch) == 0x00 || static_cast<unsigned char>(ch) == 0xE0){
+      char code;
+      if(!platform::read_char(code)) continue;
+      switch(static_cast<unsigned char>(code)){
+        case 72: // Up
+          if(haveCand && total>0){
+            sel=(sel-1+total)%total;
+            needRender = true;
+          }
+          break;
+        case 80: // Down
+          if(haveCand && total>0){
+            sel=(sel+1)%total;
+            needRender = true;
+          }
+          break;
+        case 75: // Left
+          {
+            size_t prev = utf8PrevIndex(buf, cursorByte);
+            if(prev != cursorByte){
+              cursorByte = prev;
+              needRender = true;
+            }
+          }
+          break;
+        case 77: // Right
+          {
+            size_t next = utf8NextIndex(buf, cursorByte);
+            if(next != cursorByte){
+              cursorByte = next;
+              needRender = true;
+            }
+          }
+          break;
+        default:
+          break;
+      }
+      continue;
+    }
+#endif
     if(static_cast<unsigned char>(ch) >= 0x20){
       buf.insert(buf.begin() + static_cast<std::string::difference_type>(cursorByte), ch);
       cursorByte += 1;
