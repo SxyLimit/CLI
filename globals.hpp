@@ -231,7 +231,8 @@ struct AppSettings {
   std::string promptTheme = "blue";
   std::map<std::string, std::string> promptThemeArtPaths;
   bool promptInputEllipsisEnabled = false;
-  int  promptInputEllipsisMaxWidth = 60;
+  int  promptInputEllipsisLeftWidth = 30;
+  int  promptInputEllipsisRightWidth = 30;
   std::string configHome;
 };
 

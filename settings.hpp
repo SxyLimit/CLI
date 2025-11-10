@@ -49,7 +49,8 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
     {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
     {"prompt.input_ellipsis.enabled", {SettingValueKind::Boolean, {"false", "true"}}},
-    {"prompt.input_ellipsis.max_width", {SettingValueKind::String, {}}},
+    {"prompt.input_ellipsis.left_width", {SettingValueKind::String, {}}},
+    {"prompt.input_ellipsis.right_width", {SettingValueKind::String, {}}},
     {"home.path", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
   };
   return infos;
@@ -146,8 +147,8 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
         out.assign(langs.begin(), langs.end());
       }else if(key=="prompt.name"){
         // no predefined suggestions
-      }else if(key=="prompt.input_ellipsis.max_width"){
-        out = {"40", "60", "80"};
+      }else if(key=="prompt.input_ellipsis.left_width" || key=="prompt.input_ellipsis.right_width"){
+        out = {"20", "30", "40", "60"};
       }
       break;
   }
@@ -209,10 +210,16 @@ inline void load_settings(const std::string& path){
         }
       }else if(key=="prompt.input_ellipsis.enabled"){
         bool b; if(parseBool(val,b)) g_settings.promptInputEllipsisEnabled = b;
-      }else if(key=="prompt.input_ellipsis.max_width"){
+      }else if(key=="prompt.input_ellipsis.left_width"){
         try{
           int v = std::stoi(val);
-          if(v >= 3) g_settings.promptInputEllipsisMaxWidth = v;
+          if(v >= 0) g_settings.promptInputEllipsisLeftWidth = v;
+        }catch(...){
+        }
+      }else if(key=="prompt.input_ellipsis.right_width"){
+        try{
+          int v = std::stoi(val);
+          if(v >= 0) g_settings.promptInputEllipsisRightWidth = v;
         }catch(...){
         }
       }else if(key=="prompt.theme_art_path"){
@@ -251,7 +258,8 @@ inline void save_settings(const std::string& path){
   out << "prompt.name=" << g_settings.promptName << "\n";
   out << "prompt.theme=" << g_settings.promptTheme << "\n";
   out << "prompt.input_ellipsis.enabled=" << (g_settings.promptInputEllipsisEnabled ? "true" : "false") << "\n";
-  out << "prompt.input_ellipsis.max_width=" << g_settings.promptInputEllipsisMaxWidth << "\n";
+  out << "prompt.input_ellipsis.left_width=" << g_settings.promptInputEllipsisLeftWidth << "\n";
+  out << "prompt.input_ellipsis.right_width=" << g_settings.promptInputEllipsisRightWidth << "\n";
   auto pathForTheme = [&](const std::string& theme) -> std::string {
     auto it = g_settings.promptThemeArtPaths.find(theme);
     if(it == g_settings.promptThemeArtPaths.end()) return "";
@@ -299,8 +307,12 @@ inline bool settings_get_value(const std::string& key, std::string& value){
     value = g_settings.promptInputEllipsisEnabled ? "true" : "false";
     return true;
   }
-  if(key=="prompt.input_ellipsis.max_width"){
-    value = std::to_string(g_settings.promptInputEllipsisMaxWidth);
+  if(key=="prompt.input_ellipsis.left_width"){
+    value = std::to_string(g_settings.promptInputEllipsisLeftWidth);
+    return true;
+  }
+  if(key=="prompt.input_ellipsis.right_width"){
+    value = std::to_string(g_settings.promptInputEllipsisRightWidth);
     return true;
   }
   if(key=="prompt.theme_art_path"){
@@ -404,7 +416,7 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     g_settings.promptInputEllipsisEnabled = b;
     return true;
   }
-  if(key=="prompt.input_ellipsis.max_width"){
+  if(key=="prompt.input_ellipsis.left_width" || key=="prompt.input_ellipsis.right_width"){
     int v = 0;
     try{
       size_t idx = 0;
@@ -414,11 +426,15 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
       error = "invalid_value";
       return false;
     }
-    if(v < 3){
+    if(v < 0){
       error = "invalid_value";
       return false;
     }
-    g_settings.promptInputEllipsisMaxWidth = v;
+    if(key=="prompt.input_ellipsis.left_width"){
+      g_settings.promptInputEllipsisLeftWidth = v;
+    }else{
+      g_settings.promptInputEllipsisRightWidth = v;
+    }
     return true;
   }
   if(key=="prompt.theme_art_path"){
