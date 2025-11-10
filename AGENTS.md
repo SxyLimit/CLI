@@ -12,6 +12,12 @@ This project now uses the redesigned tool architecture. Please follow these rule
 - Register new built-in tools in `register_all_tools()` using the exported factory. Do **not** call `REG.registerTool` directly outside that helper.
 - When you need custom completions, attach a `ToolCompletionProvider` in the returned `ToolDefinition` (see the `setting` tool for an example).
 
+### `setting` command expectations
+- Keep the CLI grammar as `setting <list|get|set> …`. The first argument must always be the action keyword.
+- `setting get` should accept partial prefixes and print every leaf under that branch while still honouring exact matches.
+- `setting set` must resolve the key before reading the new value; rely on the known key catalogue to decide where the path ends and surface completion hints for both segments and allowed values.
+- Autocomplete should always suggest the next path segment immediately after `setting` is typed (no placeholder token) and continue offering hierarchical segments until the command reaches a full key.
+
 ### Extending the tool set (workflow)
 1. Create a new header under `tools/` named after the command (for example `tools/mkdir.hpp`).
    - Define a `struct` with `static ToolSpec ui()` and `static ToolExecutionResult run(const ToolExecutionRequest&)`.

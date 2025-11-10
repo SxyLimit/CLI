@@ -386,9 +386,8 @@ struct Setting {
     spec.summary = "Manage CLI settings";
     set_tool_summary_locale(spec, "en", "Manage CLI settings");
     set_tool_summary_locale(spec, "zh", "管理 CLI 设置");
-    set_tool_help_locale(spec, "en", "setting <segments...> [list|get|set <value>]");
-    set_tool_help_locale(spec, "zh", "setting <分段...> [list|get|set <值>]");
-    spec.positional.push_back(positional("<toolname>"));
+    set_tool_help_locale(spec, "en", "setting <list|get|set> <segments...> [value]");
+    set_tool_help_locale(spec, "zh", "setting <list|get|set> <分段...> [值]");
     return spec;
   }
 
@@ -396,107 +395,123 @@ struct Setting {
     const auto& args = request.tokens;
     if(args.size() < 2){
       g_parse_error_cmd = "setting";
-      return detail::text_result("usage: setting <path...> <list|get|set> [value]\n", 1);
+      return detail::text_result("usage: setting <list|get|set> <path...> [value]\n", 1);
     }
-    std::vector<std::string> segments;
-    std::string action;
-    size_t actionIndex = 0;
-    for(size_t i = 1; i < args.size(); ++i){
-      if(action.empty() && (args[i] == "list" || args[i] == "get" || args[i] == "set")){
-        action = args[i];
-        actionIndex = i;
-        break;
-      }
-      segments.push_back(args[i]);
+
+    std::string action = args[1];
+    if(action != "list" && action != "get" && action != "set"){
+      g_parse_error_cmd = "setting";
+      return detail::text_result("usage: setting <list|get|set> <path...> [value]\n", 1);
     }
-    if(action.empty()){
-      action = "list";
-    }
-    std::string key = join_setting_segments(segments);
+
     if(action == "list"){
+      std::vector<std::string> segments(args.begin() + 2, args.end());
+      std::string prefix = join_setting_segments(segments);
       auto keys = settings_list_keys();
       std::ostringstream oss;
       oss << tr("setting_list_header") << "\n";
       for(const auto& item : keys){
-        if(!segments.empty()){
-          if(item.rfind(key, 0) != 0) continue;
-        }
+        if(!prefix.empty() && item.rfind(prefix, 0) != 0) continue;
         std::string value;
         settings_get_value(item, value);
         oss << "  " << item << " = " << value << "\n";
       }
       return detail::text_result(oss.str());
     }
-    if(segments.empty()){
+
+    if(action == "get"){
+      std::vector<std::string> segments(args.begin() + 2, args.end());
+      if(segments.empty()){
+        g_parse_error_cmd = "setting";
+        return detail::text_result("setting: key required\n", 1);
+      }
+      std::string prefix = join_setting_segments(segments);
+      std::string prefixDot = prefix + ".";
+      std::ostringstream oss;
+      bool found = false;
+      std::string value;
+      if(settings_get_value(prefix, value)){
+        oss << trFmt("setting_get_value", {{"key", prefix}, {"value", value}}) << "\n";
+        found = true;
+      }
+      auto keys = settings_list_keys();
+      for(const auto& item : keys){
+        if(item == prefix) continue;
+        if(item.rfind(prefixDot, 0) != 0) continue;
+        std::string childValue;
+        if(!settings_get_value(item, childValue)) continue;
+        oss << "  " << item << " = " << childValue << "\n";
+        found = true;
+      }
+      if(!found){
+        g_parse_error_cmd = "setting";
+        return detail::text_result(trFmt("setting_unknown_key", {{"key", prefix}}) + "\n", 1);
+      }
+      return detail::text_result(oss.str());
+    }
+
+    if(args.size() < 3){
       g_parse_error_cmd = "setting";
       return detail::text_result("setting: key required\n", 1);
     }
-    if(action == "get"){
-      std::string value;
-      if(!settings_get_value(key, value)){
-        g_parse_error_cmd = "setting";
+
+    auto keys = settings_list_keys();
+    std::set<std::string> keySet(keys.begin(), keys.end());
+    std::vector<std::string> candidate;
+    std::vector<std::string> best;
+    size_t firstValueIndex = args.size();
+    for(size_t i = 2; i < args.size(); ++i){
+      candidate.push_back(args[i]);
+      std::string currentKey = join_setting_segments(candidate);
+      if(keySet.count(currentKey)){
+        best = candidate;
+        firstValueIndex = i + 1;
+      }
+    }
+
+    if(best.empty()){
+      g_parse_error_cmd = "setting";
+      std::string attempted = join_setting_segments(candidate);
+      return detail::text_result(trFmt("setting_unknown_key", {{"key", attempted}}) + "\n", 1);
+    }
+
+    if(firstValueIndex >= args.size()){
+      g_parse_error_cmd = "setting";
+      return detail::text_result("usage: setting set <path...> <value>\n", 1);
+    }
+
+    std::string key = join_setting_segments(best);
+    std::string value;
+    for(size_t i = firstValueIndex; i < args.size(); ++i){
+      if(i > firstValueIndex) value.push_back(' ');
+      value += args[i];
+    }
+    std::string error;
+    if(!settings_set_value(key, value, error)){
+      g_parse_error_cmd = "setting";
+      if(error == "unknown_key"){
         return detail::text_result(trFmt("setting_unknown_key", {{"key", key}}) + "\n", 1);
       }
-      return detail::text_result(trFmt("setting_get_value", {{"key", key}, {"value", value}}) + "\n");
+      return detail::text_result(trFmt("setting_invalid_value", {{"key", key}, {"value", value}}) + "\n", 1);
     }
-    if(action == "set"){
-      if(actionIndex + 1 >= args.size()){
-        g_parse_error_cmd = "setting";
-        return detail::text_result("usage: setting <path...> set <value>\n", 1);
-      }
-      std::string value;
-      for(size_t i = actionIndex + 1; i < args.size(); ++i){
-        if(i > actionIndex + 1) value.push_back(' ');
-        value += args[i];
-      }
-      std::string error;
-      if(!settings_set_value(key, value, error)){
-        g_parse_error_cmd = "setting";
-        if(error == "unknown_key"){
-          return detail::text_result(trFmt("setting_unknown_key", {{"key", key}}) + "\n", 1);
-        }
-        return detail::text_result(trFmt("setting_invalid_value", {{"key", key}, {"value", value}}) + "\n", 1);
-      }
-      save_settings(settings_file_path());
-      return detail::text_result(trFmt("setting_set_success", {{"key", key}, {"value", value}}) + "\n");
-    }
-    g_parse_error_cmd = "setting";
-    return detail::text_result("usage: setting <path...> <list|get|set> [value]\n", 1);
+    save_settings(settings_file_path());
+    return detail::text_result(trFmt("setting_set_success", {{"key", key}, {"value", value}}) + "\n");
   }
 
   static Candidates complete(const std::string& buffer, const std::vector<std::string>& tokens){
     Candidates cand;
     if(tokens.empty()) return cand;
+
     SplitWord sw = splitLastWord(buffer);
     bool endsWithSpace = !buffer.empty() && std::isspace(static_cast<unsigned char>(buffer.back()));
-    if(tokens.size() == 1 && !endsWithSpace){
-      return cand;
-    }
-    std::string current = sw.word;
-    std::vector<std::string> rest(tokens.begin() + 1, tokens.end());
-    std::string action;
-    size_t actionIndex = rest.size();
-    const std::set<std::string> actions = {"list", "get", "set"};
-    for(size_t i = 0; i < rest.size(); ++i){
-      if(actions.count(rest[i])){
-        action = rest[i];
-        actionIndex = i;
-        break;
-      }
-    }
-    std::vector<std::string> prefix;
-    if(action.empty()){
-      prefix = rest;
-      if(!endsWithSpace && !prefix.empty()) prefix.pop_back();
-    }else{
-      prefix.assign(rest.begin(), rest.begin() + actionIndex);
-    }
-    auto addCandidate = [&](const std::string& label, bool appendSpace){
-      std::string item = sw.before + label;
-      if(appendSpace) item += ' ';
-      MatchResult match = compute_match(label, current);
-      if(!match.matched) return;
-      if(!endsWithSpace && match.exact && label == current) return;
+    const std::vector<std::string> actionsVec = {"list", "get", "set"};
+    const std::set<std::string> actions(actionsVec.begin(), actionsVec.end());
+
+    auto pushActionCandidate = [&](const std::string& label, const std::string& pattern){
+      MatchResult match = compute_match(label, pattern);
+      std::string base = buffer;
+      if(!endsWithSpace) base += ' ';
+      std::string item = base + label + ' ';
       cand.items.push_back(item);
       cand.labels.push_back(label);
       cand.matchDetails.push_back(match);
@@ -505,28 +520,115 @@ struct Setting {
       cand.exactMatches.push_back(match.exact);
     };
 
-    if(action.empty()){
-      auto segments = next_setting_segments(prefix);
-      for(const auto& seg : segments){
-        addCandidate(seg, true);
+    if(tokens.size() == 1){
+      for(const auto& action : actionsVec){
+        pushActionCandidate(action, "");
       }
-      if(!prefix.empty()){
-        for(const auto& act : actions){
-          addCandidate(act, true);
-        }
+      return cand;
+    }
+
+    auto addCandidate = [&](const std::string& label, bool appendSpace, const std::string& pattern){
+      MatchResult match = compute_match(label, pattern);
+      if(!match.matched) return;
+      if(!endsWithSpace && match.exact && label == sw.word) return;
+      std::string item = sw.before + label;
+      if(appendSpace) item += ' ';
+      cand.items.push_back(item);
+      cand.labels.push_back(label);
+      cand.matchDetails.push_back(match);
+      cand.matchPositions.push_back(match.positions);
+      cand.annotations.push_back("");
+      cand.exactMatches.push_back(match.exact);
+    };
+
+    std::vector<std::string> rest(tokens.begin() + 1, tokens.end());
+    if(rest.empty()){
+      for(const auto& action : actionsVec){
+        addCandidate(action, true, sw.word);
       }
-    }else if(!endsWithSpace && actionIndex == rest.size() - 1){
-      for(const auto& act : actions){
-        addCandidate(act, true);
+      sortCandidatesByMatch(sw.word, cand);
+      return cand;
+    }
+
+    std::string actionToken = rest.front();
+    if(!actions.count(actionToken)){
+      for(const auto& action : actionsVec){
+        addCandidate(action, true, sw.word);
       }
-    }else if(action == "set"){
-      std::string key = join_setting_segments(prefix);
-      auto suggestions = settings_value_suggestions_for(key);
-      for(const auto& suggestion : suggestions){
-        addCandidate(suggestion, false);
+      sortCandidatesByMatch(sw.word, cand);
+      return cand;
+    }
+
+    if(rest.size() == 1 && !endsWithSpace){
+      for(const auto& action : actionsVec){
+        addCandidate(action, true, sw.word);
+      }
+      sortCandidatesByMatch(sw.word, cand);
+      return cand;
+    }
+
+    std::vector<std::string> typed(rest.begin() + 1, rest.end());
+    std::vector<std::string> prefix;
+    std::string pattern = sw.word;
+    if(!typed.empty()){
+      prefix = typed;
+      if(!endsWithSpace){
+        pattern = prefix.back();
+        prefix.pop_back();
+      }else{
+        pattern.clear();
       }
     }
-    sortCandidatesByMatch(current, cand);
+
+    auto addSegmentCandidates = [&](){
+      auto segments = next_setting_segments(prefix);
+      for(const auto& seg : segments){
+        addCandidate(seg, true, pattern);
+      }
+      sortCandidatesByMatch(pattern, cand);
+    };
+
+    if(actionToken == "list" || actionToken == "get"){
+      addSegmentCandidates();
+      return cand;
+    }
+
+    auto keys = settings_list_keys();
+    std::set<std::string> keySet(keys.begin(), keys.end());
+    std::vector<std::string> fullSegments = typed;
+    std::vector<std::string> best;
+    std::vector<std::string> building;
+    for(const auto& seg : fullSegments){
+      building.push_back(seg);
+      std::string candidateKey = join_setting_segments(building);
+      if(keySet.count(candidateKey)){
+        best = building;
+      }
+    }
+
+    bool editingValue = false;
+    std::string keyForSuggestions;
+    if(fullSegments.size() > best.size()){
+      editingValue = true;
+      keyForSuggestions = join_setting_segments(best);
+      pattern = sw.word;
+    }else if(endsWithSpace && !best.empty() && best.size() == fullSegments.size()){
+      editingValue = true;
+      keyForSuggestions = join_setting_segments(best);
+      pattern.clear();
+    }
+
+    if(editingValue){
+      if(keyForSuggestions.empty()) return cand;
+      auto suggestions = settings_value_suggestions_for(keyForSuggestions);
+      for(const auto& suggestion : suggestions){
+        addCandidate(suggestion, false, pattern);
+      }
+      sortCandidatesByMatch(pattern, cand);
+      return cand;
+    }
+
+    addSegmentCandidates();
     return cand;
   }
 
