@@ -574,31 +574,27 @@ struct Setting {
 
     auto addSegmentCandidates = [&](const std::vector<std::string>& segPrefix,
                                     const std::string& segPattern,
-                                    bool includeChildrenOnExact){
+                                    bool expectingNewSegment){
       auto segments = next_setting_segments(segPrefix);
-      bool showChildren = false;
-      if(includeChildrenOnExact && !segPattern.empty() && sw.word == segPattern){
-        showChildren = segments.find(segPattern) != segments.end();
-      }
-
       for(const auto& seg : segments){
-        addCandidate(seg, true, segPattern);
+        MatchResult match = compute_match(seg, segPattern);
+        if(!match.matched) continue;
+        std::string item = expectingNewSegment ? (buffer + seg) : (sw.before + seg);
+        item.push_back(' ');
+        cand.items.push_back(item);
+        cand.labels.push_back(seg);
+        cand.matchDetails.push_back(match);
+        cand.matchPositions.push_back(match.positions);
+        cand.annotations.push_back("");
+        cand.exactMatches.push_back(match.exact);
       }
-
-      if(showChildren){
-        std::vector<std::string> childPrefix = segPrefix;
-        childPrefix.push_back(segPattern);
-        auto children = next_setting_segments(childPrefix);
-        for(const auto& child : children){
-          addCandidate(child, true, std::string());
-        }
+      if(!segPattern.empty()){
+        sortCandidatesByMatch(segPattern, cand);
       }
-
-      sortCandidatesByMatch(segPattern, cand);
     };
 
     if(actionToken == "get"){
-      addSegmentCandidates(prefix, pattern, true);
+      addSegmentCandidates(prefix, pattern, endsWithSpace);
       return cand;
     }
 
@@ -643,7 +639,7 @@ struct Setting {
       return cand;
     }
 
-    addSegmentCandidates(prefix, pattern, true);
+    addSegmentCandidates(prefix, pattern, endsWithSpace);
     return cand;
   }
 
