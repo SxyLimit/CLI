@@ -43,11 +43,10 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"message.folder", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
     {"prompt.name", {SettingValueKind::String, {}}},
     {"prompt.theme", {SettingValueKind::Enum, {"blue", "blue-purple", "red-yellow", "purple-orange"}}},
-    {"prompt.theme_art_path", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
-    {"prompt.theme_art_path.blue", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
-    {"prompt.theme_art_path.blue-purple", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
-    {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
-    {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
+    {"prompt.theme_art_path.blue", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, true}},
+    {"prompt.theme_art_path.blue-purple", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, true}},
+    {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, true}},
+    {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, true}},
     {"prompt.input_ellipsis.enabled", {SettingValueKind::Boolean, {"false", "true"}}},
     {"prompt.input_ellipsis.left_width", {SettingValueKind::String, {}}},
     {"prompt.input_ellipsis.right_width", {SettingValueKind::String, {}}},
@@ -141,6 +140,17 @@ inline const SettingKeyInfo* settings_key_info(const std::string& key){
   const auto& map = keyInfoMap();
   auto it = map.find(key);
   if(it!=map.end()) return &it->second;
+  if(key=="prompt.theme_art_path"){
+    static const SettingKeyInfo aliasInfo{
+      SettingValueKind::String,
+      {},
+      true,
+      PathKind::File,
+      {".climg"},
+      true
+    };
+    return &aliasInfo;
+  }
   if(startsWith(key, "prompt.theme_art_path.")){
     static const SettingKeyInfo dynamicThemePath{
       SettingValueKind::String,
@@ -148,7 +158,7 @@ inline const SettingKeyInfo* settings_key_info(const std::string& key){
       true,
       PathKind::File,
       {".climg"},
-      false
+      true
     };
     return &dynamicThemePath;
   }
@@ -292,7 +302,6 @@ inline void save_settings(const std::string& path){
     if(it == g_settings.promptThemeArtPaths.end()) return "";
     return it->second;
   };
-  out << "prompt.theme_art_path=" << pathForTheme("blue-purple") << "\n";
   for(const std::string& themeKey : {std::string("blue"), std::string("blue-purple"), std::string("red-yellow"), std::string("purple-orange")}){
     out << "prompt.theme_art_path." << themeKey << "=" << pathForTheme(themeKey) << "\n";
   }
