@@ -613,14 +613,48 @@ struct Setting {
 
     bool editingValue = false;
     std::string keyForSuggestions;
-    if(!best.empty() && fullSegments.size() > best.size()){
-      editingValue = true;
-      keyForSuggestions = join_setting_segments(best);
-      pattern = sw.word;
-    }else if(!best.empty() && endsWithSpace && best.size() == fullSegments.size()){
-      editingValue = true;
-      keyForSuggestions = join_setting_segments(best);
-      pattern.clear();
+    std::set<std::string> childSegmentsForBest;
+    if(!best.empty()){
+      childSegmentsForBest = next_setting_segments(best);
+      std::vector<std::string> remainder;
+      if(fullSegments.size() > best.size()){
+        remainder.assign(fullSegments.begin() + best.size(), fullSegments.end());
+      }
+      if(!remainder.empty()){
+        if(remainder.size() > 1){
+          editingValue = true;
+          keyForSuggestions = join_setting_segments(best);
+          if(endsWithSpace){
+            pattern.clear();
+          }else{
+            pattern = sw.word;
+          }
+        }else{
+          const std::string& partial = remainder.back();
+          bool matchesChild = false;
+          if(!childSegmentsForBest.empty()){
+            for(const auto& seg : childSegmentsForBest){
+              if(startsWith(seg, partial)){
+                matchesChild = true;
+                break;
+              }
+            }
+          }
+          if(!matchesChild){
+            editingValue = true;
+            keyForSuggestions = join_setting_segments(best);
+            if(endsWithSpace){
+              pattern.clear();
+            }else{
+              pattern = sw.word;
+            }
+          }
+        }
+      }else if(endsWithSpace && childSegmentsForBest.empty()){
+        editingValue = true;
+        keyForSuggestions = join_setting_segments(best);
+        pattern.clear();
+      }
     }
 
     if(editingValue){
