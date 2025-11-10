@@ -299,7 +299,13 @@ struct MessageWatcherState {
 
 static MessageWatcherState g_message_watcher;
 
-static std::vector<PromptBadge> g_prompt_badges;
+struct PromptIndicatorEntry {
+  PromptIndicatorDescriptor desc;
+  PromptIndicatorState state;
+};
+
+static std::vector<std::string> g_prompt_indicator_order;
+static std::map<std::string, PromptIndicatorEntry> g_prompt_indicators;
 
 struct LlmWatcherState {
   std::string path;
@@ -311,6 +317,7 @@ struct LlmWatcherState {
 };
 
 static LlmWatcherState g_llm_watcher;
+static bool g_llm_pending = false;
 
 static std::string joinPath(const std::string& dir, const std::string& name){
   if(dir.empty()) return name;
@@ -379,6 +386,11 @@ void message_poll(){
     else ++it;
   }
   g_message_watcher.known = std::move(current);
+  bool unread = message_has_unread();
+  PromptIndicatorState state = prompt_indicator_current("message");
+  state.visible = unread;
+  state.textColor = unread ? ansi::RED : ansi::WHITE;
+  update_prompt_indicator("message", state);
 }
 
 bool message_has_unread(){
@@ -445,6 +457,11 @@ bool message_mark_read(const std::string& path){
   auto it = g_message_watcher.known.find(path);
   if(it==g_message_watcher.known.end()) return false;
   g_message_watcher.seen[path] = it->second;
+  bool unread = message_has_unread();
+  PromptIndicatorState state = prompt_indicator_current("message");
+  state.visible = unread;
+  state.textColor = unread ? ansi::RED : ansi::WHITE;
+  update_prompt_indicator("message", state);
   return true;
 }
 
@@ -484,8 +501,38 @@ std::vector<std::string> message_all_file_labels(){
   return labels;
 }
 
-void register_prompt_badge(const PromptBadge& badge){
-  g_prompt_badges.push_back(badge);
+void register_prompt_indicator(const PromptIndicatorDescriptor& desc){
+  if(desc.id.empty()) return;
+  PromptIndicatorEntry entry;
+  entry.desc = desc;
+  entry.state.text = desc.text;
+  entry.state.bracketColor = desc.bracketColor;
+  auto inserted = g_prompt_indicators.emplace(desc.id, entry);
+  if(inserted.second){
+    g_prompt_indicator_order.push_back(desc.id);
+  }else{
+    inserted.first->second.desc = desc;
+    inserted.first->second.state.text = desc.text;
+    inserted.first->second.state.bracketColor = desc.bracketColor;
+  }
+}
+
+void update_prompt_indicator(const std::string& id, const PromptIndicatorState& state){
+  auto it = g_prompt_indicators.find(id);
+  if(it == g_prompt_indicators.end()) return;
+  PromptIndicatorState next = state;
+  if(next.text.empty()) next.text = it->second.desc.text;
+  if(next.bracketColor.empty()) next.bracketColor = it->second.desc.bracketColor;
+  it->second.state = next;
+}
+
+PromptIndicatorState prompt_indicator_current(const std::string& id){
+  auto it = g_prompt_indicators.find(id);
+  if(it == g_prompt_indicators.end()) return PromptIndicatorState{};
+  PromptIndicatorState state = it->second.state;
+  if(state.text.empty()) state.text = it->second.desc.text;
+  if(state.bracketColor.empty()) state.bracketColor = it->second.desc.bracketColor;
+  return state;
 }
 
 static std::string resolve_llm_history_path(){
@@ -520,6 +567,20 @@ void llm_poll(){
     g_llm_watcher.seenMtime = 0;
     g_llm_watcher.seenSize = 0;
   }
+  if(llm_has_unread()){
+    g_llm_pending = false;
+  }
+  bool unread = llm_has_unread();
+  PromptIndicatorState state = prompt_indicator_current("llm");
+  state.visible = unread || g_llm_pending;
+  if(unread){
+    state.textColor = ansi::RED;
+  }else if(g_llm_pending){
+    state.textColor = ansi::YELLOW;
+  }else{
+    state.textColor = ansi::WHITE;
+  }
+  update_prompt_indicator("llm", state);
 }
 
 bool llm_has_unread(){
@@ -532,6 +593,21 @@ void llm_mark_seen(){
   if(!g_llm_watcher.initialized) llm_initialize();
   g_llm_watcher.seenMtime = g_llm_watcher.knownMtime;
   g_llm_watcher.seenSize = g_llm_watcher.knownSize;
+}
+
+void llm_set_pending(bool pending){
+  g_llm_pending = pending;
+  bool unread = llm_has_unread();
+  PromptIndicatorState state = prompt_indicator_current("llm");
+  state.visible = unread || g_llm_pending;
+  if(unread){
+    state.textColor = ansi::RED;
+  }else if(g_llm_pending){
+    state.textColor = ansi::YELLOW;
+  }else{
+    state.textColor = ansi::WHITE;
+  }
+  update_prompt_indicator("llm", state);
 }
 
 static void persist_home_path_to_env(const std::string& path){
@@ -658,30 +734,53 @@ static std::string plainPromptText(){
   return promptNamePlain() + "> ";
 }
 
-static std::string promptBadgesPlainText(){
-  std::set<char> letters;
-  for(const auto& badge : g_prompt_badges){
-    if(badge.letter==0) continue;
-    bool active = false;
-    try{
-      if(badge.active) active = badge.active();
-    }catch(...){
-      active = false;
+struct PromptIndicatorRender {
+  std::string plain;
+  std::string colored;
+};
+
+static PromptIndicatorRender promptIndicatorsRender(){
+  PromptIndicatorRender render;
+  bool any = false;
+  std::string bracketColor = ansi::WHITE;
+  for(const auto& id : g_prompt_indicator_order){
+    auto it = g_prompt_indicators.find(id);
+    if(it == g_prompt_indicators.end()) continue;
+    PromptIndicatorState state = prompt_indicator_current(id);
+    if(!state.visible) continue;
+    std::string text = state.text;
+    if(text.empty()) continue;
+    if(!any){
+      bracketColor = state.bracketColor.empty()? ansi::WHITE : state.bracketColor;
+      render.plain.push_back('[');
+      render.colored += bracketColor;
+      render.colored.push_back('[');
+      render.colored += ansi::RESET;
+      any = true;
     }
-    if(active) letters.insert(badge.letter);
+    std::string color = state.textColor.empty()? ansi::WHITE : state.textColor;
+    render.plain += text;
+    render.colored += color;
+    render.colored += text;
+    render.colored += ansi::RESET;
   }
-  if(letters.empty()) return std::string();
-  std::string text;
-  text.reserve(letters.size()+2);
-  text.push_back('[');
-  for(char c : letters) text.push_back(c);
-  text.push_back(']');
-  return text;
+  if(any){
+    render.plain.push_back(']');
+    render.colored += bracketColor;
+    render.colored.push_back(']');
+    render.colored += ansi::RESET;
+  }
+  return render;
 }
 
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value){
   spec.summaryLocales[lang] = value;
   if(lang=="en" && spec.summary.empty()) spec.summary = value;
+}
+
+void set_tool_help_locale(ToolSpec& spec, const std::string& lang, const std::string& value){
+  spec.helpLocales[lang] = value;
+  if(lang=="en" && spec.help.empty()) spec.help = value;
 }
 
 std::string localized_tool_summary(const ToolSpec& spec){
@@ -690,6 +789,14 @@ std::string localized_tool_summary(const ToolSpec& spec){
   auto en = spec.summaryLocales.find("en");
   if(en!=spec.summaryLocales.end() && !en->second.empty()) return en->second;
   return spec.summary;
+}
+
+std::string localized_tool_help(const ToolSpec& spec){
+  auto it = spec.helpLocales.find(g_settings.language);
+  if(it!=spec.helpLocales.end() && !it->second.empty()) return it->second;
+  auto en = spec.helpLocales.find("en");
+  if(en!=spec.helpLocales.end() && !en->second.empty()) return en->second;
+  return spec.help;
 }
 
 std::string tr(const std::string& key){
@@ -1314,8 +1421,8 @@ static int highlightCursorOffset(const std::string& label, const std::vector<int
 }
 
 static int promptDisplayWidth(){
-  std::string badges = promptBadgesPlainText();
-  return displayWidth(badges + plainPromptText());
+  auto indicators = promptIndicatorsRender();
+  return displayWidth(indicators.plain + plainPromptText());
 }
 
 // helper: 是否“路径型占位符”
@@ -1676,7 +1783,12 @@ static Candidates computeCandidates(const std::string& buf){
   }
 
   if(toks.empty()) return firstWordCandidates(buf);
-  if(const ToolSpec* spec = REG.find(toks[0])) return candidatesForTool(*spec, buf);
+  if(const ToolDefinition* def = REG.find(toks[0])){
+    if(def->completion){
+      return def->completion(buf, toks);
+    }
+    return candidatesForTool(def->ui, buf);
+  }
   return firstWordCandidates(buf);
 }
 
@@ -1688,12 +1800,13 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   if(!g_settings.showPathErrorHint) return std::nullopt;
 
   if(toks[0] == "help") return std::nullopt;
-  const ToolSpec* spec = REG.find(toks[0]);
-  if(!spec) return std::nullopt;
+  const ToolDefinition* def = REG.find(toks[0]);
+  if(!def) return std::nullopt;
+  const ToolSpec& spec = def->ui;
 
   const SubcommandSpec* sub = nullptr;
-  if(!spec->subs.empty() && toks.size()>=2){
-    for(auto &s : spec->subs){
+  if(!spec.subs.empty() && toks.size()>=2){
+    for(const auto &s : spec.subs){
       if(s.name == toks[1]){ sub = &s; break; }
     }
   }
@@ -1712,13 +1825,13 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
 
   const OptionSpec* opt = nullptr;
   if(sub){ opt = findPathOpt(sub->options); }
-  if(!opt) opt = findPathOpt(spec->options);
+  if(!opt) opt = findPathOpt(spec.options);
   if(opt){
     expected = (opt->pathKind != PathKind::Any) ? opt->pathKind : placeholderPathKind(opt->placeholder);
     hasExpectation = true;
   } else {
     if(sub){
-      std::vector<OptionSpec> combinedOpts = spec->options;
+      std::vector<OptionSpec> combinedOpts = spec.options;
       combinedOpts.insert(combinedOpts.end(), sub->options.begin(), sub->options.end());
       auto ctx = analyzePositionalPathContext(sub->positional, /*startIdx*/2, combinedOpts, toks, sw, buf);
       if(ctx.appliesToCurrentWord){
@@ -1726,7 +1839,7 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
         hasExpectation = true;
       }
     } else {
-      auto ctx = analyzePositionalPathContext(spec->positional, /*startIdx*/1, spec->options, toks, sw, buf);
+      auto ctx = analyzePositionalPathContext(spec.positional, /*startIdx*/1, spec.options, toks, sw, buf);
       if(ctx.appliesToCurrentWord){
         expected = ctx.kind;
         hasExpectation = true;
@@ -1778,26 +1891,26 @@ static std::string contextGhostFor(const std::string& buf){
     if(toks.size()==1) return " <command>";
     return "";
   }
-  const ToolSpec* spec = REG.find(toks[0]); if(!spec) return "";
-  if(inSubcommandSlot(*spec, toks)) return " <subcommand>";
-  if(!spec->subs.empty() && toks.size()>=2){
-    for(auto &sub: spec->subs){
+  const ToolDefinition* def = REG.find(toks[0]); if(!def) return "";
+  if(inSubcommandSlot(def->ui, toks)) return " <subcommand>";
+  if(!def->ui.subs.empty() && toks.size()>=2){
+    for(auto &sub: def->ui.subs){
       if(sub.name==toks[1]){
         std::set<std::string> used;
         for(size_t i=2;i<toks.size();++i)
           if(startsWith(toks[i],"--")||startsWith(toks[i],"-")) used.insert(toks[i]);
-        return renderSubGhost(*spec, sub, toks, 1, used);
+        return renderSubGhost(def->ui, sub, toks, 1, used);
       }
     }
   }
-  return renderCommandGhost(*spec, toks);
+  return renderCommandGhost(def->ui, toks);
 }
 
 // ===== Rendering =====
 static void renderPromptLabel(){
-  std::string badges = promptBadgesPlainText();
-  if(!badges.empty()){
-    std::cout << ansi::RED << ansi::BOLD << badges << ansi::RESET;
+  auto indicator = promptIndicatorsRender();
+  if(!indicator.plain.empty()){
+    std::cout << indicator.colored;
   }
   const std::string name = promptNamePlain();
   const std::string theme = g_settings.promptTheme;
@@ -1879,22 +1992,42 @@ static void renderBelowThree(const std::string& status, int status_len,
 // ===== Exec & help =====
 static void execToolLine(const std::string& line){
   auto toks = splitTokens(line); if(toks.empty()) return;
-  const ToolSpec* spec = REG.find(toks[0]); if(!spec){ std::cout<<trFmt("unknown_command", {{"name", toks[0]}})<<"\n"; return; }
-  if(!spec->subs.empty() && toks.size()>=2){
-    for(auto &sub: spec->subs){ if(sub.name == toks[1]){ if(sub.handler){ sub.handler(toks); return; } } }
+  const ToolDefinition* def = REG.find(toks[0]); if(!def){ std::cout<<trFmt("unknown_command", {{"name", toks[0]}})<<"\n"; return; }
+  if(!def->executor){ std::cout<<"no handler\n"; return; }
+  ToolExecutionRequest req;
+  req.tokens = toks;
+  req.silent = false;
+  req.forLLM = false;
+  ToolExecutionResult result = def->executor(req);
+  std::string out = result.viewForCli();
+  if(!out.empty()) std::cout<<out;
+}
+
+ToolExecutionResult invoke_registered_tool(const std::string& line, bool silent){
+  ToolExecutionRequest req;
+  req.tokens = splitTokens(line);
+  req.silent = silent;
+  req.forLLM = true;
+  if(req.tokens.empty()) return ToolExecutionResult{};
+  const ToolDefinition* def = REG.find(req.tokens[0]);
+  if(!def || !def->executor){
+    ToolExecutionResult res;
+    res.exitCode = 1;
+    res.output = trFmt("unknown_command", {{"name", req.tokens[0]}}) + "\n";
+    res.display = res.output;
+    return res;
   }
-  if(spec->handler){ spec->handler(toks); return; }
-  std::cout<<"no handler\n";
+  return def->executor(req);
 }
 static void printHelpAll(){
   auto names = REG.listNames();
   std::cout<<tr("help_available_commands")<<"\n";
   std::cout<<tr("help_command_summary")<<"\n";
   for(auto &n:names){
-    const ToolSpec* t=REG.find(n);
+    const ToolDefinition* t=REG.find(n);
     std::cout<<"  "<<n;
     if(t){
-      std::string summary = localized_tool_summary(*t);
+      std::string summary = localized_tool_summary(t->ui);
       if(!summary.empty()) std::cout<<"  - "<<summary;
     }
     std::cout<<"\n";
@@ -1902,14 +2035,17 @@ static void printHelpAll(){
   std::cout<<tr("help_use_command")<<"\n";
 }
 static void printHelpOne(const std::string& name){
-  const ToolSpec* t = REG.find(name);
-  if(!t){ std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return; }
-  std::string summary = localized_tool_summary(*t);
+  const ToolDefinition* def = REG.find(name);
+  if(!def){ std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return; }
+  const ToolSpec& spec = def->ui;
+  std::string summary = localized_tool_summary(spec);
   if(summary.empty()) std::cout<<name<<"\n";
   else std::cout<<name<<" - "<<summary<<"\n";
-  if(!t->subs.empty()){
+  std::string helpText = localized_tool_help(spec);
+  if(!helpText.empty()) std::cout<<helpText<<"\n";
+  if(!spec.subs.empty()){
     std::cout<<tr("help_subcommands")<<"\n";
-    for(auto &s:t->subs){
+    for(auto &s:spec.subs){
       std::cout<<"    "<<s.name;
       if(!s.positional.empty()) std::cout<<" "<<join(s.positional);
       if(!s.options.empty())    std::cout<<"  [options]";
@@ -1928,9 +2064,9 @@ static void printHelpOne(const std::string& name){
       }
     }
   }
-  if(!t->options.empty()){
+  if(!spec.options.empty()){
     std::cout<<tr("help_options")<<"\n";
-    for(auto &o:t->options){
+    for(auto &o:spec.options){
       std::cout<<"    "<<o.name;
       if(o.takesValue) std::cout<<" "<<(o.placeholder.empty()? "<val>":o.placeholder);
       if(o.required)   std::cout<<tr("help_required_tag");
@@ -1941,8 +2077,8 @@ static void printHelpOne(const std::string& name){
       std::cout<<"\n";
     }
   }
-  if(!t->positional.empty()){
-    std::cout<<trFmt("help_positional", {{"value", join(t->positional)}})<<"\n";
+  if(!spec.positional.empty()){
+    std::cout<<trFmt("help_positional", {{"value", join(spec.positional)}})<<"\n";
   }
 }
 
@@ -1954,8 +2090,8 @@ int main(){
   message_set_watch_folder(g_settings.messageWatchFolder);
   llm_initialize();
 
-  register_prompt_badge(PromptBadge{"message", 'M', [](){ return message_has_unread(); }});
-  register_prompt_badge(PromptBadge{"llm", 'L', [](){ return llm_has_unread(); }});
+  register_prompt_indicator(PromptIndicatorDescriptor{"message", "M"});
+  register_prompt_indicator(PromptIndicatorDescriptor{"llm", "L"});
 
   // 1) 注册内置工具与状态
   register_all_tools();

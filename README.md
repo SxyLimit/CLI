@@ -106,7 +106,9 @@ positional=<url>
 
 - `main.cpp`：REPL 主循环、渲染及补全逻辑。
 - `globals.hpp`：公共类型、辅助函数与全局状态声明。
-- `tools.hpp`：路径补全实现、命令/状态注册、动态工具加载。
+- `tools.hpp`：路径补全实现、核心内置命令（`show`/`setting`/`exit`）以及所有工具的统一注册入口。
+- `tools/tool_common.hpp`：为各个工具头文件提供共享的执行辅助函数与类型。
+- `tools/*.hpp`：每个内置命令对应一个独立头文件（例如 `tools/ls.hpp`、`tools/cat.hpp`、`tools/mv.hpp`），包含 UI 定义、执行逻辑以及 `tool::make_*_tool()` 工厂函数。
 - `tools/pytool.py`：示例 Python 工具脚本。
 - `settings/`：默认配置目录，包含 `mycli_settings.json`、`mycli_tools.conf`、`mycli_llm_history.json`。
 
@@ -115,3 +117,4 @@ positional=<url>
 - 所有可执行文件均需使用 C++17 编译。
 - 若新增命令，记得在 `register_all_tools()` 中注册并为选项配置合适的路径类型。
 - 自定义补全策略时，可复用 `pathCandidatesForWord` 与 `analyzePositionalPathContext` 等辅助函数。
+- 按照“一命令一文件”的约定扩展内置工具：在 `tools/` 目录下创建 `<name>.hpp`，实现 `ToolSpec`/执行逻辑/可选补全工厂，随后在 `tools.hpp` 中 `#include` 新文件并调用 `REG.registerTool(tool::make_<name>_tool())`；完成后同步更新本文档中相关说明。

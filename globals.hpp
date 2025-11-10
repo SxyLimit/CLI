@@ -90,10 +90,27 @@ struct ToolSpec {
   std::string name;
   std::string summary;
   std::map<std::string, std::string> summaryLocales;
+  std::string help;
+  std::map<std::string, std::string> helpLocales;
   std::vector<OptionSpec> options;                     // global/options
   std::vector<std::string> positional;                 // command-level positional
   std::vector<SubcommandSpec> subs;                    // subcommands
   std::function<void(const std::vector<std::string>&)> handler;
+};
+
+struct ToolExecutionRequest {
+  std::vector<std::string> tokens;
+  bool silent = false;
+  bool forLLM = false;
+};
+
+struct ToolExecutionResult {
+  int exitCode = 0;
+  std::string output;
+  std::optional<std::string> display;
+
+  bool succeeded() const { return exitCode == 0; }
+  std::string viewForCli() const { return display.has_value() ? *display : output; }
 };
 
 struct MatchResult {
@@ -121,6 +138,16 @@ struct Candidates {
   std::vector<MatchResult> matchDetails;
 };
 
+using ToolExecutor = std::function<ToolExecutionResult(const ToolExecutionRequest&)>;
+using ToolCompletionProvider = std::function<Candidates(const std::string& buffer,
+                                                        const std::vector<std::string>& tokens)>;
+
+struct ToolDefinition {
+  ToolSpec ui;
+  ToolExecutor executor;
+  ToolCompletionProvider completion;
+};
+
 MatchResult compute_match(const std::string& candidate, const std::string& pattern);
 void sortCandidatesByMatch(const std::string& query, Candidates& cand);
 
@@ -130,11 +157,14 @@ struct StatusProvider {
 };
 
 struct ToolRegistry {
-  std::map<std::string, ToolSpec> tools;
+  std::map<std::string, ToolDefinition> tools;
   std::vector<StatusProvider> statusProviders;
 
-  void registerTool(const ToolSpec& t){ tools[t.name] = t; }
-  const ToolSpec* find(const std::string& n) const {
+  void registerTool(const ToolDefinition& def){ tools[def.ui.name] = def; }
+  ToolDefinition* find(const std::string& n){
+    auto it = tools.find(n); return it==tools.end()? nullptr : &it->second;
+  }
+  const ToolDefinition* find(const std::string& n) const {
     auto it = tools.find(n); return it==tools.end()? nullptr : &it->second;
   }
   std::vector<std::string> listNames() const {
@@ -215,7 +245,9 @@ std::vector<std::string> settings_list_keys();
 std::string tr(const std::string& key);
 std::string trFmt(const std::string& key, const std::map<std::string, std::string>& values);
 std::string localized_tool_summary(const ToolSpec& spec);
+std::string localized_tool_help(const ToolSpec& spec);
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value);
+void set_tool_help_locale(ToolSpec& spec, const std::string& lang, const std::string& value);
 const std::string& settings_file_path();
 const std::string& config_home();
 bool set_config_home(const std::string& path, std::string& error);
@@ -241,13 +273,26 @@ std::optional<std::string> message_resolve_label(const std::string& label);
 std::vector<std::string> message_all_file_labels();
 
 // ===== Prompt badges =====
-struct PromptBadge {
+struct PromptIndicatorDescriptor {
   std::string id;
-  char letter = 0;
-  std::function<bool()> active;
+  std::string text;
+  std::string bracketColor = ansi::WHITE;
 };
 
-void register_prompt_badge(const PromptBadge& badge);
+struct PromptIndicatorState {
+  bool visible = false;
+  std::string text;
+  std::string textColor = ansi::WHITE;
+  std::string bracketColor = ansi::WHITE;
+};
+
+void register_prompt_indicator(const PromptIndicatorDescriptor& desc);
+void update_prompt_indicator(const std::string& id, const PromptIndicatorState& state);
+PromptIndicatorState prompt_indicator_current(const std::string& id);
+
+void llm_set_pending(bool pending);
+
+ToolExecutionResult invoke_registered_tool(const std::string& line, bool silent = true);
 
 // ===== LLM watcher =====
 void llm_initialize();
