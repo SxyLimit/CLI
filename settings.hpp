@@ -5,6 +5,7 @@
 #include <sstream>
 #include <optional>
 #include <cstring>
+#include <algorithm>
 
 inline AppSettings g_settings{};
 
@@ -17,6 +18,10 @@ enum class SettingValueKind {
 struct SettingKeyInfo {
   SettingValueKind kind = SettingValueKind::String;
   std::vector<std::string> allowedValues;
+  bool isPath = false;
+  PathKind pathKind = PathKind::Any;
+  std::vector<std::string> allowedExtensions;
+  bool allowDirectory = true;
 };
 
 namespace {
@@ -34,15 +39,15 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"completion.subsequence_mode", {SettingValueKind::Enum, {"ranked", "greedy"}}},
     {"language", {SettingValueKind::String, {}}},
     {"ui.path_error_hint", {SettingValueKind::Boolean, {"false", "true"}}},
-    {"message.folder", {SettingValueKind::String, {}}},
+    {"message.folder", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
     {"prompt.name", {SettingValueKind::String, {}}},
     {"prompt.theme", {SettingValueKind::Enum, {"blue", "blue-purple", "red-yellow", "purple-orange"}}},
-    {"prompt.theme_art_path", {SettingValueKind::String, {}}},
-    {"prompt.theme_art_path.blue", {SettingValueKind::String, {}}},
-    {"prompt.theme_art_path.blue-purple", {SettingValueKind::String, {}}},
-    {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}}},
-    {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}}},
-    {"home.path", {SettingValueKind::String, {}}},
+    {"prompt.theme_art_path", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
+    {"prompt.theme_art_path.blue", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
+    {"prompt.theme_art_path.blue-purple", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
+    {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
+    {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
+    {"home.path", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
   };
   return infos;
 }
@@ -108,8 +113,19 @@ inline const std::vector<std::string>& settings_known_languages(){
 inline const SettingKeyInfo* settings_key_info(const std::string& key){
   const auto& map = keyInfoMap();
   auto it = map.find(key);
-  if(it==map.end()) return nullptr;
-  return &it->second;
+  if(it!=map.end()) return &it->second;
+  if(startsWith(key, "prompt.theme_art_path.")){
+    static const SettingKeyInfo dynamicThemePath{
+      SettingValueKind::String,
+      {},
+      true,
+      PathKind::File,
+      {".climg"},
+      false
+    };
+    return &dynamicThemePath;
+  }
+  return nullptr;
 }
 
 inline std::vector<std::string> settings_value_suggestions_for(const std::string& key){
@@ -384,7 +400,14 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
 
 inline std::vector<std::string> settings_list_keys(){
   std::vector<std::string> keys;
-  for(const auto& kv : keyInfoMap()) keys.push_back(kv.first);
+  for(const auto& kv : keyInfoMap()){
+    keys.push_back(kv.first);
+  }
+  for(const auto& kv : g_settings.promptThemeArtPaths){
+    if(kv.first.empty()) continue;
+    keys.push_back("prompt.theme_art_path." + kv.first);
+  }
   std::sort(keys.begin(), keys.end());
+  keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
   return keys;
 }
