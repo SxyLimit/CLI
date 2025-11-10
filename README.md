@@ -23,7 +23,8 @@ HOME_PATH=settings
 ## 主要特性
 
 - **命令注册与帮助**：通过 `ToolRegistry` 注册内置工具，可使用 `help` 查看命令说明。
-- **路径补全与类型校验**：根据命令占位符或选项定义推断路径类型（文件/目录），补全时自动过滤；当输入不存在或类型不符时，以红色/黄色提示错误原因。
+- **路径补全与类型校验**：根据命令占位符或选项定义推断路径类型（文件/目录），补全时自动过滤；支持为文件参数声明允许的后缀（例如 `.climg`），同时在帮助文档与错误提示中给出明确指引。
+- **命令委托**：`run <command> [args...]` 会在当前 shell 中执行任意系统命令，参数使用 `shellEscape` 逐项转义，便于临时调用外部工具。
 - **候选提示与 Ghost 文本**：在输入行下方展示至多三个候选项，输入末尾补全不存在时给出上下文提示。
 - **状态栏扩展**：可通过 `StatusProvider` 注册自定义状态（示例中显示当前工作目录）。
 - **外部工具配置**：支持在配置目录（默认 `./settings/`）下的 `mycli_tools.conf` 中用 INI 语法新增命令及子命令，含互斥选项、动态执行等。
@@ -89,6 +90,21 @@ positional=<text>
 
 上述示例会在 CLI 中注册 `ai translate` 子命令，并通过 `python3 tools/ai_translate.py` 执行。脚本内部可以使用任意外部 SDK（例如请求自己的推理服务）。
 
+`optionPaths` 和 `positionalPaths` 支持声明路径类型与后缀过滤：
+
+```ini
+[image-art]
+summary=Convert images into MyCLI art
+type=python
+exec=python3
+script=./tools/image_to_art.py
+positional=<input> <output>
+positionalPaths=1:file,2:file:.climg
+```
+
+上述配置会将第一个位置参数视为源文件，第二个位置参数限制为 `.climg` 输出文件。补全、帮助文本与错误提示会自动同步这一要求。
+同理，`optionPaths=--output:file:.climg|.png` 可用于限制选项值的后缀范围。
+
 如果需要调用系统命令或 HTTP 客户端，同样可以将 `type` 设置为 `system`，并在 `exec` 字段中填写可执行文件名称或绝对路径，CLI 会负责参数拼接与补全。例如：
 
 ```ini
@@ -110,11 +126,12 @@ positional=<url>
 - `tools/tool_common.hpp`：为各个工具头文件提供共享的执行辅助函数与类型。
 - `tools/*.hpp`：每个内置命令对应一个独立头文件（例如 `tools/ls.hpp`、`tools/cat.hpp`、`tools/mv.hpp`），包含 UI 定义、执行逻辑以及 `tool::make_*_tool()` 工厂函数。
 - `tools/pytool.py`：示例 Python 工具脚本。
+- `tools/image_to_art.py`：将图片转为 `.climg` 结构化文本的脚本，可配合动态工具 `image-art` 使用。
 - `settings/`：默认配置目录，包含 `mycli_settings.json`、`mycli_tools.conf`、`mycli_llm_history.json`。
 
 ## 开发提示
 
 - 所有可执行文件均需使用 C++17 编译。
-- 若新增命令，记得在 `register_all_tools()` 中注册并为选项配置合适的路径类型。
-- 自定义补全策略时，可复用 `pathCandidatesForWord` 与 `analyzePositionalPathContext` 等辅助函数。
+- 若新增命令，记得在 `register_all_tools()` 中注册并为选项或位置参数配置合适的路径类型/后缀（使用 `tool::positional(...)` 和 `OptionSpec::allowedExtensions`）。
+- 自定义补全策略时，可复用 `pathCandidatesForWord` 与 `analyzePositionalPathContext` 等辅助函数，必要时传入扩展名列表与目录控制参数。
 - 按照“一命令一文件”的约定扩展内置工具：在 `tools/` 目录下创建 `<name>.hpp`，实现 `ToolSpec`/执行逻辑/可选补全工厂，随后在 `tools.hpp` 中 `#include` 新文件并调用 `REG.registerTool(tool::make_<name>_tool())`；完成后同步更新本文档中相关说明。

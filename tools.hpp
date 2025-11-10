@@ -31,7 +31,11 @@ inline std::vector<std::string> render_mycli_ascii_art(){
 }
 
 // ===== Path candidates (inline) =====
-inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind){
+inline Candidates pathCandidatesForWord(const std::string& fullBuf,
+                                        const std::string& word,
+                                        PathKind kind,
+                                        const std::vector<std::string>* extensions,
+                                        bool allowDirectories){
   Candidates out;
 
   auto isSep = [](char ch){ return ch == '/' || ch == '\\'; };
@@ -66,6 +70,40 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
   };
   char preferredSep = pickSep(std::filesystem::path::preferred_separator);
 
+  const std::vector<std::string>* extList = (extensions && !extensions->empty()) ? extensions : nullptr;
+  std::vector<std::string> normalizedExts;
+  std::string extensionHint;
+  if(extList){
+    normalizedExts.reserve(extList->size());
+    for(const auto& rawExt : *extList){
+      if(rawExt.empty()) continue;
+      std::string norm = rawExt;
+      if(norm.front() != '.') norm.insert(norm.begin(), '.');
+      std::transform(norm.begin(), norm.end(), norm.begin(), [](unsigned char c){
+        return static_cast<char>(std::tolower(c));
+      });
+      if(!norm.empty()) normalizedExts.push_back(norm);
+    }
+    std::sort(normalizedExts.begin(), normalizedExts.end());
+    normalizedExts.erase(std::unique(normalizedExts.begin(), normalizedExts.end()), normalizedExts.end());
+    if(!normalizedExts.empty()){
+      extensionHint = "[" + join(normalizedExts, "|") + "]";
+    }else{
+      extList = nullptr;
+    }
+  }
+
+  auto matchesExtension = [&](const std::string& candidateName){
+    if(!extList) return true;
+    auto pos = candidateName.find_last_of('.');
+    if(pos == std::string::npos) return false;
+    std::string ext = candidateName.substr(pos);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){
+      return static_cast<char>(std::tolower(c));
+    });
+    return std::find(normalizedExts.begin(), normalizedExts.end(), ext) != normalizedExts.end();
+  };
+
   for(const auto& entry : it){
     std::string name = entry.path().filename().string();
     if(name == "." || name == "..") continue;
@@ -82,17 +120,20 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
 
     bool include = false;
     bool dirAsHint = false;
-    if(kind == PathKind::Any){
-      include = isDir || isFile;
-    }else if(kind == PathKind::Dir){
-      include = isDir;
-    }else if(kind == PathKind::File){
-      if(isFile){
+    if(isDir){
+      if(!allowDirectories) continue;
+      if(kind == PathKind::Dir){
         include = true;
-      }else if(isDir){
+      }else if(kind == PathKind::File){
         include = true;
         dirAsHint = true;
+      }else{ // PathKind::Any
+        include = true;
       }
+    }else if(isFile){
+      if(kind == PathKind::Dir) continue;
+      if(!matchesExtension(name)) continue;
+      include = true;
     }
     if(!include) continue;
 
@@ -109,7 +150,13 @@ inline Candidates pathCandidatesForWord(const std::string& fullBuf, const std::s
     out.items.push_back(sw.before + cand);
     out.labels.push_back(cand);
     out.matchPositions.push_back(std::move(positions));
-    out.annotations.push_back(dirAsHint? "[dir]" : "");
+    std::string annotation;
+    if(dirAsHint) annotation = "[dir]";
+    if(!extensionHint.empty()){
+      if(!annotation.empty()) annotation += " ";
+      annotation += extensionHint;
+    }
+    out.annotations.push_back(std::move(annotation));
     out.exactMatches.push_back(match.exact);
     out.matchDetails.push_back(match);
   }
@@ -169,7 +216,7 @@ inline std::string renderCommandGhost(const ToolSpec& spec, const std::vector<st
   std::string out;
   if (posCount < spec.positional.size()){
     for (size_t k = posCount; k < spec.positional.size(); ++k){
-      out += " " + spec.positional[k];
+      out += " " + spec.positional[k].placeholder;
     }
   }
 
@@ -196,7 +243,7 @@ inline std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& 
     return false;
   };
   std::string out;
-  for (auto &ph : sub.positional) out += " " + ph;
+  for (auto &ph : sub.positional) out += " " + ph.placeholder;
   for (auto &o : sub.options){
     if (used.count(o.name) || suppressedByMutex(o.name)) continue;
     std::string piece = " " + o.name + (o.takesValue? " " + (o.placeholder.empty()? "<val>":o.placeholder) : "");
@@ -533,12 +580,12 @@ inline void register_tools_from_config(const std::string& path){
   if(!in.good()) return;
 
   struct TmpTool {
-    std::string summary, help, type="system", exec, script, options, positional, optionPaths;
+    std::string summary, help, type="system", exec, script, options, positional, optionPaths, positionalPaths;
     std::map<std::string, std::string> summaryLocales;
     std::map<std::string, std::string> helpLocales;
     std::map<std::string, std::vector<std::string>> optvalues;
     struct TmpSub {
-      std::string name, options, positional, optionPaths;
+      std::string name, options, positional, optionPaths, positionalPaths;
       std::map<std::string, std::vector<std::string>> optvalues;
       std::map<std::string, std::vector<std::string>> mutexGroups;
     };
@@ -577,6 +624,7 @@ inline void register_tools_from_config(const std::string& path){
       else if(k=="options") T.options = v;
       else if(k=="positional") T.positional = v;
       else if(k=="optionPaths") T.optionPaths = v;
+      else if(k=="positionalPaths") T.positionalPaths = v;
       else if(k.rfind("optvalues.",0)==0){
         auto on = k.substr(10); T.optvalues[on] = splitCSV(v);
       }
@@ -585,6 +633,7 @@ inline void register_tools_from_config(const std::string& path){
       if(k=="options") S.options = v;
       else if(k=="positional") S.positional = v;
       else if(k=="optionPaths") S.optionPaths = v;
+      else if(k=="positionalPaths") S.positionalPaths = v;
       else if(k.rfind("optvalues.",0)==0){
         auto on=k.substr(10); S.optvalues[on] = splitCSV(v);
       }else if(k=="mutex"){ // mutex=group:opt1|opt2,group2:optA|optB
@@ -602,6 +651,91 @@ inline void register_tools_from_config(const std::string& path){
   }
 
   // 构建并注册
+  auto splitByChar = [&](const std::string& text, char delim){
+    std::vector<std::string> parts;
+    std::string cur;
+    for(char c : text){
+      if(c == delim){
+        auto token = trim(cur);
+        if(!token.empty()) parts.push_back(token);
+        cur.clear();
+      }else{
+        cur.push_back(c);
+      }
+    }
+    auto token = trim(cur);
+    if(!token.empty()) parts.push_back(token);
+    return parts;
+  };
+
+  auto toLowerCopy = [](std::string value){
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c){
+      return static_cast<char>(std::tolower(c));
+    });
+    return value;
+  };
+
+  auto parseKind = [&](const std::string& token){
+    std::string lower = toLowerCopy(token);
+    if(lower == "dir" || lower == "directory" || lower == "d") return PathKind::Dir;
+    if(lower == "file" || lower == "f") return PathKind::File;
+    if(lower == "any" || lower == "path" || lower == "a") return PathKind::Any;
+    return PathKind::Any;
+  };
+
+  auto applyPositionalHints = [&](std::vector<PositionalArgSpec>& dest, const std::string& specText){
+    if(specText.empty()) return;
+    for(const auto& entry : splitCSV(specText)){
+      if(entry.empty()) continue;
+      auto parts = splitByChar(entry, ':');
+      if(parts.empty()) continue;
+      size_t idx = 0;
+      try{
+        idx = static_cast<size_t>(std::stoul(parts[0]));
+      }catch(...){
+        continue;
+      }
+      if(idx == 0 || idx > dest.size()) continue;
+      PositionalArgSpec& arg = dest[idx - 1];
+      arg.isPath = true;
+      if(parts.size() >= 2 && !parts[1].empty()){
+        arg.pathKind = parseKind(parts[1]);
+      }
+      if(parts.size() >= 3){
+        arg.allowedExtensions = splitByChar(parts[2], '|');
+        if(!arg.allowedExtensions.empty() && arg.pathKind == PathKind::Any){
+          arg.pathKind = PathKind::File;
+        }
+      }
+    }
+  };
+
+  struct OptionPathHint {
+    PathKind kind = PathKind::Any;
+    std::vector<std::string> extensions;
+  };
+
+  auto parseOptionPathMap = [&](const std::string& text){
+    std::map<std::string, OptionPathHint> hints;
+    for(const auto& entry : splitCSV(text)){
+      if(entry.empty()) continue;
+      auto parts = splitByChar(entry, ':');
+      if(parts.empty()) continue;
+      OptionPathHint hint;
+      if(parts.size() >= 2 && !parts[1].empty()){
+        hint.kind = parseKind(parts[1]);
+      }
+      if(parts.size() >= 3){
+        hint.extensions = splitByChar(parts[2], '|');
+        if(!hint.extensions.empty() && hint.kind == PathKind::Any){
+          hint.kind = PathKind::File;
+        }
+      }
+      hints[parts[0]] = std::move(hint);
+    }
+    return hints;
+  };
+
   for(auto& kv : all){
     const std::string& name = kv.first;
     TmpTool& T = kv.second;
@@ -611,16 +745,25 @@ inline void register_tools_from_config(const std::string& path){
     tool.help = T.help;
     tool.helpLocales = T.helpLocales;
 
-    std::set<std::string> topPathOpts;
-    for(auto& s : splitCSV(T.optionPaths)) topPathOpts.insert(s);
+    auto optionPathHints = parseOptionPathMap(T.optionPaths);
     for(auto& oname : splitCSV(T.options)){
       OptionSpec o; o.name = oname;
       if(T.optvalues.count(oname)){ o.takesValue = true; o.valueSuggestions = T.optvalues[oname]; }
-      if(topPathOpts.count(oname)){ o.takesValue = true; o.isPath = true; if(o.placeholder.empty()) o.placeholder = "<path>"; }
+      if(optionPathHints.count(oname)){
+        o.takesValue = true;
+        o.isPath = true;
+        const auto& hint = optionPathHints[oname];
+        o.pathKind = hint.kind;
+        o.allowedExtensions = hint.extensions;
+        if(o.placeholder.empty()) o.placeholder = "<path>";
+      }
       tool.options.push_back(o);
     }
     if(!T.positional.empty()){
-      tool.positional = splitTokens(T.positional);
+      for(const auto& token : splitTokens(T.positional)){
+        tool.positional.push_back(tool::positional(token));
+      }
+      applyPositionalHints(tool.positional, T.positionalPaths);
     }
 
     if(!T.subs.empty()){
@@ -628,15 +771,24 @@ inline void register_tools_from_config(const std::string& path){
         const auto& S = skv.second;
         SubcommandSpec sub;
         sub.name = S.name;
-        std::set<std::string> subPathOpts;
-        for(auto& s : splitCSV(S.optionPaths)) subPathOpts.insert(s);
+        auto subPathHints = parseOptionPathMap(S.optionPaths);
         for(auto& oname : splitCSV(S.options)){
           OptionSpec o; o.name = oname;
           if(S.optvalues.count(oname)){ o.takesValue = true; o.valueSuggestions = S.optvalues.at(oname); }
-          if(subPathOpts.count(oname)){ o.takesValue = true; o.isPath = true; if(o.placeholder.empty()) o.placeholder="<path>"; }
+          if(subPathHints.count(oname)){
+            o.takesValue = true;
+            o.isPath = true;
+            const auto& hint = subPathHints[oname];
+            o.pathKind = hint.kind;
+            o.allowedExtensions = hint.extensions;
+            if(o.placeholder.empty()) o.placeholder="<path>";
+          }
           sub.options.push_back(o);
         }
-        sub.positional = splitTokens(S.positional);
+        for(const auto& token : splitTokens(S.positional)){
+          sub.positional.push_back(tool::positional(token));
+        }
+        applyPositionalHints(sub.positional, S.positionalPaths);
         sub.mutexGroups = S.mutexGroups;
         tool.subs.push_back(std::move(sub));
       }

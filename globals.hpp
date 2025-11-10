@@ -76,12 +76,23 @@ struct OptionSpec {
   std::string placeholder;
   bool isPath = false;
   PathKind pathKind = PathKind::Any;
+  bool allowDirectory = true;
+  std::vector<std::string> allowedExtensions;
+};
+
+struct PositionalArgSpec {
+  std::string placeholder;
+  bool isPath = false;
+  PathKind pathKind = PathKind::Any;
+  std::vector<std::string> allowedExtensions;
+  bool allowDirectory = true;
+  bool inferFromPlaceholder = true;
 };
 
 struct SubcommandSpec {
   std::string name;
   std::vector<OptionSpec> options;
-  std::vector<std::string> positional;                 // e.g. {"<path>", "[<file>]", "<dir...>"}
+  std::vector<PositionalArgSpec> positional;           // e.g. {"<path>", "[<file>]", "<dir...>"}
   std::map<std::string, std::vector<std::string>> mutexGroups;
   std::function<void(const std::vector<std::string>&)> handler;
 };
@@ -93,7 +104,7 @@ struct ToolSpec {
   std::string help;
   std::map<std::string, std::string> helpLocales;
   std::vector<OptionSpec> options;                     // global/options
-  std::vector<std::string> positional;                 // command-level positional
+  std::vector<PositionalArgSpec> positional;           // command-level positional
   std::vector<SubcommandSpec> subs;                    // subcommands
   std::function<void(const std::vector<std::string>&)> handler;
 };
@@ -186,7 +197,11 @@ extern bool         g_should_exit;
 extern std::string  g_parse_error_cmd;
 
 // ===== Shared decls (inline impl in tools.hpp) =====
-Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind = PathKind::Any);
+Candidates pathCandidatesForWord(const std::string& fullBuf,
+                                 const std::string& word,
+                                 PathKind kind = PathKind::Any,
+                                 const std::vector<std::string>* extensions = nullptr,
+                                 bool allowDirectories = true);
 std::string renderCommandGhost(const ToolSpec& spec, const std::vector<std::string>& toks);
 std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& sub,
                            const std::vector<std::string>& toks, size_t subIdx,

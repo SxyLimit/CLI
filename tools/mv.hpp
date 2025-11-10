@@ -11,7 +11,10 @@ struct Mv {
     spec.summary = "Move or rename files";
     set_tool_summary_locale(spec, "en", "Move or rename files");
     set_tool_summary_locale(spec, "zh", "移动或重命名文件");
-    spec.positional = {"<source>", "<target>"};
+    spec.positional = {
+      positional("source", /*isPath=*/true, PathKind::Any, {}, true, false),
+      positional("target", /*isPath=*/true, PathKind::Any, {}, true, false)
+    };
     set_tool_help_locale(spec, "en", "mv <source> <target>");
     set_tool_help_locale(spec, "zh", "mv <源路径> <目标路径>");
     return spec;

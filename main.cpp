@@ -288,8 +288,39 @@ static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18
   {"unknown_command",        {{"en", "unknown command: {name}"}, {"zh", "未知命令：{name}"}}},
   {"path_error_missing",     {{"en", "missing"}, {"zh", "不存在"}}},
   {"path_error_need_dir",    {{"en", "needs directory"}, {"zh", "需要目录"}}},
-  {"path_error_need_file",   {{"en", "needs file"}, {"zh", "需要文件"}}}
+  {"path_error_need_file",   {{"en", "needs file"}, {"zh", "需要文件"}}},
+  {"path_error_need_extension", {{"en", "needs extension: {ext}"}, {"zh", "需要后缀：{ext}"}}}
 };
+
+static std::vector<std::string> positionalPlaceholders(const std::vector<PositionalArgSpec>& specs){
+  std::vector<std::string> out;
+  out.reserve(specs.size());
+  for(const auto& spec : specs){
+    out.push_back(spec.placeholder);
+  }
+  return out;
+}
+
+static std::string joinPositionalPlaceholders(const std::vector<PositionalArgSpec>& specs){
+  return join(positionalPlaceholders(specs));
+}
+
+static std::vector<std::string> normalizeExtensions(const std::vector<std::string>& exts){
+  std::vector<std::string> normalized;
+  normalized.reserve(exts.size());
+  for(const auto& ext : exts){
+    if(ext.empty()) continue;
+    std::string norm = ext;
+    if(norm.front() != '.') norm.insert(norm.begin(), '.');
+    std::transform(norm.begin(), norm.end(), norm.begin(), [](unsigned char c){
+      return static_cast<char>(std::tolower(c));
+    });
+    if(!norm.empty()) normalized.push_back(norm);
+  }
+  std::sort(normalized.begin(), normalized.end());
+  normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+  return normalized;
+}
 
 struct MessageWatcherState {
   std::string folder;
@@ -1439,13 +1470,27 @@ static PathKind placeholderPathKind(const std::string& ph){
   return PathKind::Any;
 }
 
+static bool positionalSpecIsPath(const PositionalArgSpec& spec){
+  if(spec.isPath) return true;
+  if(spec.inferFromPlaceholder) return isPathLikePlaceholder(spec.placeholder);
+  return false;
+}
+
+static PathKind positionalSpecKind(const PositionalArgSpec& spec){
+  if(spec.pathKind != PathKind::Any) return spec.pathKind;
+  if(spec.inferFromPlaceholder) return placeholderPathKind(spec.placeholder);
+  return PathKind::Any;
+}
+
 struct PathCompletionContext {
   bool active = false;
   bool appliesToCurrentWord = false;
   PathKind kind = PathKind::Any;
+  std::vector<std::string> extensions;
+  bool allowDirectory = true;
 };
 
-static PathCompletionContext analyzePositionalPathContext(const std::vector<std::string>& posDefs,
+static PathCompletionContext analyzePositionalPathContext(const std::vector<PositionalArgSpec>& posDefs,
                                                          size_t startIdx,
                                                          const std::vector<OptionSpec>& opts,
                                                          const std::vector<std::string>& toks,
@@ -1494,11 +1539,15 @@ static PathCompletionContext analyzePositionalPathContext(const std::vector<std:
 
   if(!(trailingSpace || currentWordIsPositional)) return ctx;
 
-  if(posFilled < posDefs.size() && isPathLikePlaceholder(posDefs[posFilled])){
+  if(posFilled < posDefs.size() && positionalSpecIsPath(posDefs[posFilled])){
     ctx.active = true;
     ctx.appliesToCurrentWord = currentWordIsPositional;
-    PathKind kind = placeholderPathKind(posDefs[posFilled]);
-    ctx.kind = kind;
+    ctx.kind = positionalSpecKind(posDefs[posFilled]);
+    ctx.extensions = posDefs[posFilled].allowedExtensions;
+    ctx.allowDirectory = posDefs[posFilled].allowDirectory;
+    if(!ctx.extensions.empty() && ctx.kind == PathKind::Any){
+      ctx.kind = PathKind::File;
+    }
   }
   return ctx;
 }
@@ -1651,7 +1700,8 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       if(o.name==prev && o.takesValue){
         if(o.isPath) {
           PathKind kind = (o.pathKind != PathKind::Any) ? o.pathKind : placeholderPathKind(o.placeholder);
-          out = pathCandidatesForWord(buf, sw.word, kind);
+          const std::vector<std::string>* extPtr = o.allowedExtensions.empty() ? nullptr : &o.allowedExtensions;
+          out = pathCandidatesForWord(buf, sw.word, kind, extPtr, o.allowDirectory);
           return true;
         }
         std::vector<std::string> vals = o.valueSuggestions;
@@ -1674,7 +1724,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
   }
 
   // 如果“下一个位置参数占位符”为路径型 → 直接进入路径补全（无需 ./ 或 /）
-  auto positionalContext = [&](const std::vector<std::string>& posDefs, size_t startIdx, const std::vector<OptionSpec>& opts){
+  auto positionalContext = [&](const std::vector<PositionalArgSpec>& posDefs, size_t startIdx, const std::vector<OptionSpec>& opts){
     return analyzePositionalPathContext(posDefs, startIdx, opts, toks, sw, buf);
   };
 
@@ -1683,12 +1733,14 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
     combinedOpts.insert(combinedOpts.end(), sub->options.begin(), sub->options.end());
     auto ctx = positionalContext(sub->positional, /*startIdx*/2, combinedOpts);
     if(ctx.active){
-      return pathCandidatesForWord(buf, sw.word, ctx.kind);
+      const std::vector<std::string>* extPtr = ctx.extensions.empty() ? nullptr : &ctx.extensions;
+      return pathCandidatesForWord(buf, sw.word, ctx.kind, extPtr, ctx.allowDirectory);
     }
   }else{
     auto ctx = positionalContext(spec.positional, /*startIdx*/1, spec.options);
     if(ctx.active){
-      return pathCandidatesForWord(buf, sw.word, ctx.kind);
+      const std::vector<std::string>* extPtr = ctx.extensions.empty() ? nullptr : &ctx.extensions;
+      return pathCandidatesForWord(buf, sw.word, ctx.kind, extPtr, ctx.allowDirectory);
     }
   }
 
@@ -1717,7 +1769,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
 
   // 路径模式（兜底）
   if(startsWith(sw.word,"/")||startsWith(sw.word,"./")||startsWith(sw.word,"../")){
-    return pathCandidatesForWord(buf, sw.word, PathKind::Any);
+    return pathCandidatesForWord(buf, sw.word, PathKind::Any, nullptr, true);
   }
 
   return out;
@@ -1813,6 +1865,8 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
 
   PathKind expected = PathKind::Any;
   bool hasExpectation = false;
+  std::vector<std::string> requiredExtensions;
+  bool allowDirectory = true;
 
   auto findPathOpt = [&](const std::vector<OptionSpec>& opts)->const OptionSpec*{
     if(toks.size()<2 || toks.back()!=sw.word) return nullptr;
@@ -1828,6 +1882,11 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   if(!opt) opt = findPathOpt(spec.options);
   if(opt){
     expected = (opt->pathKind != PathKind::Any) ? opt->pathKind : placeholderPathKind(opt->placeholder);
+    if(!opt->allowedExtensions.empty() && expected == PathKind::Any){
+      expected = PathKind::File;
+    }
+    requiredExtensions = opt->allowedExtensions;
+    allowDirectory = opt->allowDirectory;
     hasExpectation = true;
   } else {
     if(sub){
@@ -1836,18 +1895,24 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
       auto ctx = analyzePositionalPathContext(sub->positional, /*startIdx*/2, combinedOpts, toks, sw, buf);
       if(ctx.appliesToCurrentWord){
         expected = ctx.kind;
+        requiredExtensions = ctx.extensions;
+        allowDirectory = ctx.allowDirectory;
         hasExpectation = true;
       }
     } else {
       auto ctx = analyzePositionalPathContext(spec.positional, /*startIdx*/1, spec.options, toks, sw, buf);
       if(ctx.appliesToCurrentWord){
         expected = ctx.kind;
+        requiredExtensions = ctx.extensions;
+        allowDirectory = ctx.allowDirectory;
         hasExpectation = true;
       }
     }
   }
 
   if(!hasExpectation) return std::nullopt;
+
+  auto normalizedExts = normalizeExtensions(requiredExtensions);
 
   struct stat st{};
   if(::stat(sw.word.c_str(), &st)!=0){
@@ -1873,6 +1938,10 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
     return false;
   };
 
+  if(!allowDirectory && isDir && expected != PathKind::Dir){
+    return tr("path_error_need_file");
+  }
+
   if(expected == PathKind::Dir && !isDir){
     if(hasMatchingCandidateOfType(PathKind::Dir)) return std::nullopt;
     return tr("path_error_need_dir");
@@ -1880,6 +1949,17 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   if(expected == PathKind::File && !isFile){
     if(hasMatchingCandidateOfType(PathKind::File)) return std::nullopt;
     return tr("path_error_need_file");
+  }
+
+  if(!normalizedExts.empty() && isFile){
+    auto pos = sw.word.find_last_of('.');
+    std::string ext = (pos == std::string::npos) ? std::string() : sw.word.substr(pos);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){
+      return static_cast<char>(std::tolower(c));
+    });
+    if(std::find(normalizedExts.begin(), normalizedExts.end(), ext) == normalizedExts.end()){
+      return trFmt("path_error_need_extension", {{"ext", join(normalizedExts, "|")}});
+    }
   }
   return std::nullopt;
 }
@@ -2047,7 +2127,7 @@ static void printHelpOne(const std::string& name){
     std::cout<<tr("help_subcommands")<<"\n";
     for(auto &s:spec.subs){
       std::cout<<"    "<<s.name;
-      if(!s.positional.empty()) std::cout<<" "<<join(s.positional);
+      if(!s.positional.empty()) std::cout<<" "<<joinPositionalPlaceholders(s.positional);
       if(!s.options.empty())    std::cout<<"  [options]";
       std::cout<<"\n";
       if(!s.options.empty()){
@@ -2056,6 +2136,10 @@ static void printHelpOne(const std::string& name){
           if(o.takesValue) std::cout<<" "<<(o.placeholder.empty()? "<val>":o.placeholder);
           if(o.required)   std::cout<<tr("help_required_tag");
           if(o.isPath)     std::cout<<tr("help_path_tag");
+          if(!o.allowedExtensions.empty()){
+            auto exts = normalizeExtensions(o.allowedExtensions);
+            if(!exts.empty()) std::cout<<" ["<<join(exts, "|")<<"]";
+          }
           if(!o.valueSuggestions.empty()){
             std::cout<<"  {"; for(size_t i=0;i<o.valueSuggestions.size();++i){ if(i) std::cout<<","; std::cout<<o.valueSuggestions[i]; } std::cout<<"}";
           }
@@ -2071,6 +2155,10 @@ static void printHelpOne(const std::string& name){
       if(o.takesValue) std::cout<<" "<<(o.placeholder.empty()? "<val>":o.placeholder);
       if(o.required)   std::cout<<tr("help_required_tag");
       if(o.isPath)     std::cout<<tr("help_path_tag");
+      if(!o.allowedExtensions.empty()){
+        auto exts = normalizeExtensions(o.allowedExtensions);
+        if(!exts.empty()) std::cout<<" ["<<join(exts, "|")<<"]";
+      }
       if(!o.valueSuggestions.empty()){
         std::cout<<"  {"; for(size_t i=0;i<o.valueSuggestions.size();++i){ if(i) std::cout<<","; std::cout<<o.valueSuggestions[i]; } std::cout<<"}";
       }
@@ -2078,7 +2166,7 @@ static void printHelpOne(const std::string& name){
     }
   }
   if(!spec.positional.empty()){
-    std::cout<<trFmt("help_positional", {{"value", join(spec.positional)}})<<"\n";
+    std::cout<<trFmt("help_positional", {{"value", joinPositionalPlaceholders(spec.positional)}})<<"\n";
   }
 }
 
@@ -2147,7 +2235,13 @@ int main(){
     total = static_cast<int>(cand.labels.size());
     haveCand = total > 0;
     if(haveCand && sel >= total) sel = 0;
-    contextGhost = haveCand ? std::string() : contextGhostFor(buf);
+    bool showInlineSuggestion = haveCand;
+    if(showInlineSuggestion){
+      if(sel >= static_cast<int>(cand.items.size()) || cand.items[sel].rfind(buf, 0) != 0){
+        showInlineSuggestion = false;
+      }
+    }
+    contextGhost = (haveCand && showInlineSuggestion) ? std::string() : contextGhostFor(buf);
     auto pathError = detectPathErrorMessage(buf, cand);
 
     std::cout << ansi::CLR
@@ -2157,7 +2251,7 @@ int main(){
     if(pathError){
       std::cout << ansi::RED << sw.word << ansi::RESET
                 << "  " << ansi::YELLOW << "+" << *pathError << ansi::RESET;
-    }else if(haveCand){
+    }else if(showInlineSuggestion){
       const std::string& label = cand.labels[sel];
       const std::vector<int>& matches = cand.matchPositions[sel];
       std::string rendered = renderHighlightedLabel(label, matches);
@@ -2179,7 +2273,7 @@ int main(){
     int cursorCol = baseIndent;
     if(pathError){
       cursorCol += displayWidth(sw.word);
-    }else if(haveCand){
+    }else if(showInlineSuggestion){
       int offset = highlightCursorOffset(cand.labels[sel], cand.matchPositions[sel]);
       if(sel < cand.annotations.size() && !cand.annotations[sel].empty() && sw.word.empty()){
         offset = 0;

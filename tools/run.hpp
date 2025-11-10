@@ -4,54 +4,39 @@
 
 namespace tool {
 
-struct RunDemo {
+struct RunCommand {
   static ToolSpec ui(){
     ToolSpec spec;
     spec.name = "run";
-    spec.summary = "Run a demo job with options";
-    set_tool_summary_locale(spec, "en", "Run a demo job with options");
-    set_tool_summary_locale(spec, "zh", "运行示例任务（带参数）");
-    set_tool_help_locale(spec, "en", "Usage: run [--model <name>] [--topk <k>] [--temp <t>] [--input <path>]");
-    set_tool_help_locale(spec, "zh", "用法：run [--model <name>] [--topk <k>] [--temp <t>] [--input <path>]");
-    spec.options = {
-      {"--model", true, {"alpha","bravo","charlie","delta"}, nullptr, false, "<name>", false},
-      {"--topk",  true, {"1","3","5","8","10"},             nullptr, false, "<k>",    false},
-      {"--temp",  true, {"0.0","0.2","0.5","0.8","1.0"},    nullptr, false, "<t>",    false},
-      {"--input", true, {}, nullptr, false, "<path>", true}
-    };
+    spec.summary = "Execute a system command";
+    set_tool_summary_locale(spec, "en", "Execute a system command");
+    set_tool_summary_locale(spec, "zh", "执行系统命令");
+    set_tool_help_locale(spec, "en", "Usage: run <command> [args...]");
+    set_tool_help_locale(spec, "zh", "用法：run <命令> [参数...]");
+    spec.positional = {positional("<command>")};
     return spec;
   }
 
   static ToolExecutionResult run(const ToolExecutionRequest& request){
     const auto& args = request.tokens;
-    std::string model = "alpha";
-    std::string topk = "5";
-    std::string temp = "0.2";
-    std::string inputPath;
-    for(size_t i = 1; i + 1 < args.size(); ++i){
-      if(args[i] == "--model") model = args[i + 1];
-      else if(args[i] == "--topk") topk = args[i + 1];
-      else if(args[i] == "--temp") temp = args[i + 1];
-      else if(args[i] == "--input") inputPath = args[i + 1];
-      else if(args[i].rfind("--", 0) == 0){
-        g_parse_error_cmd = "run";
-        return detail::text_result("unknown option: " + args[i] + "\n", 1);
-      }
+    if(args.size() < 2){
+      g_parse_error_cmd = "run";
+      return detail::text_result("usage: run <command> [args...]\n", 1);
     }
-    std::ostringstream oss;
-    oss << "(run) model=" << model
-        << " topk=" << topk
-        << " temp=" << temp;
-    if(!inputPath.empty()) oss << " input=" << inputPath;
-    oss << "\n";
-    return detail::text_result(oss.str());
+    std::string command;
+    for(size_t i = 1; i < args.size(); ++i){
+      if(i > 1) command.push_back(' ');
+      command += shellEscape(args[i]);
+    }
+    auto result = detail::execute_shell(request, command);
+    return result;
   }
 };
 
 inline ToolDefinition make_run_tool(){
   ToolDefinition def;
-  def.ui = RunDemo::ui();
-  def.executor = RunDemo::run;
+  def.ui = RunCommand::ui();
+  def.executor = RunCommand::run;
   return def;
 }
 

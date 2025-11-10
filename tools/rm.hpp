@@ -12,7 +12,7 @@ struct Rm {
     set_tool_summary_locale(spec, "en", "Remove files");
     set_tool_summary_locale(spec, "zh", "删除文件");
     spec.options = {{"-r", false, {}, nullptr, false, "", false}};
-    spec.positional = {"<path>"};
+    spec.positional = {positional("<path>")};
     return spec;
   }
 

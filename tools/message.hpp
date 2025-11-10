@@ -14,7 +14,7 @@ struct Message {
     spec.subs = {
       SubcommandSpec{"list", {}, {}, {}, nullptr},
       SubcommandSpec{"last", {}, {}, {}, nullptr},
-      SubcommandSpec{"detail", {}, {"<file>"}, {}, nullptr}
+      SubcommandSpec{"detail", {}, {positional("<file>")}, {}, nullptr}
     };
     return spec;
   }

@@ -82,5 +82,22 @@ inline ToolExecutionResult execute_shell(const ToolExecutionRequest& request,
 }
 
 } // namespace detail
+
+inline PositionalArgSpec positional(const std::string& placeholder,
+                                    bool isPath = false,
+                                    PathKind kind = PathKind::Any,
+                                    std::vector<std::string> extensions = {},
+                                    bool allowDirectory = true,
+                                    bool inferFromPlaceholder = true){
+  PositionalArgSpec spec;
+  spec.placeholder = placeholder;
+  spec.isPath = isPath;
+  spec.pathKind = kind;
+  spec.allowedExtensions = std::move(extensions);
+  spec.allowDirectory = allowDirectory;
+  spec.inferFromPlaceholder = inferFromPlaceholder;
+  return spec;
+}
+
 } // namespace tool
 

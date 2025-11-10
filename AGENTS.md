@@ -7,6 +7,7 @@ This project now uses the redesigned tool architecture. Please follow these rule
 - Only the core bootstrapping commands (`show`, `setting`, and the `exit` aliases) live directly inside `tools.hpp`.
 - Every other built-in tool must live in its own header under `tools/` (for example `tools/ls.hpp`, `tools/cat.hpp`).
   - Each header includes `tools/tool_common.hpp`, defines a struct with `static ToolSpec ui()` / `static ToolExecutionResult run(...)`, and exposes `tool::make_<name>_tool()`.
+  - Populate `spec.positional` with `PositionalArgSpec` instances by calling the helper `tool::positional(...)`. This keeps placeholder labels, path-kind hints, and allowed extensions in sync with the autocomplete engine.
 - `tools/tool_common.hpp` hosts the shared helpers available to all tool headers.
 - Register new built-in tools in `register_all_tools()` using the exported factory. Do **not** call `REG.registerTool` directly outside that helper.
 - When you need custom completions, attach a `ToolCompletionProvider` in the returned `ToolDefinition` (see the `setting` tool for an example).
@@ -24,6 +25,13 @@ This project now uses the redesigned tool architecture. Please follow these rule
 6. If the tool needs asynchronous behaviour (e.g., LLM polling), expose reusable helpers that update prompt indicators (see below) and document them here for future reuse.
 7. Every change to the tool catalogue **must** update `README.md` so the user guide stays in sync with these steps.
 
+### Path metadata & extensions
+- `PositionalArgSpec` and `OptionSpec` both expose `allowedExtensions` and `allowDirectory`.
+  - Use `tool::positional("placeholder", /*isPath=*/true, PathKind::File, {".climg"})` to require specific suffixes for positional arguments.
+  - For option values, fill `OptionSpec::allowedExtensions` (and optionally `pathKind`) so that autocomplete filters and error hints enforce the suffix rule.
+- When you introduce new suffix requirements in code, document the behaviour in `README.md` and provide examples in the configuration guide.
+- `pathCandidatesForWord` now accepts optional extension and directory parameters; pass them whenever you forward context data to the helper.
+
 ## Asynchronous indicators
 - Prompt badges are now managed via `PromptIndicatorDescriptor` / `PromptIndicatorState`.
 - Register new indicators with `register_prompt_indicator` and update their state using `update_prompt_indicator`.
@@ -36,8 +44,13 @@ This project now uses the redesigned tool architecture. Please follow these rule
 - `ToolExecutionRequest::forLLM` is set for these invocations; avoid writing directly to `std::cout` inside tool logic and rely on the returned result text instead.
 
 ## Dynamic tool configuration
-- `mycli_tools.conf` now supports optional multilingual help strings: use `help=` for the default value and `help.<lang>=` for localised variants.
+- `mycli_tools.conf` supports optional multilingual help strings: use `help=` for the default value and `help.<lang>=` for localised variants.
+- `optionPaths` entries accept typed descriptors: `--output:file:.climg|.png` will mark the option as a file path and limit completions to the listed suffixes.
+- `positionalPaths` uses `1:file:.climg` style descriptors (1-based index). When this metadata is present, the runtime automatically toggles autocomplete, error messages, and help output to reflect the requirement.
 - Dynamic tools are executed through the unified tool interface, so they also benefit from `invoke_registered_tool` and silent execution capture.
+
+## Command helpers
+- The built-in `run` command simply shells out to whatever command follows (`run ls -al`), escaping each argument safely via `shellEscape`. Use this tool for delegating to external commands without adding a bespoke wrapper.
 
 ## File utilities
 - The built-in `cat` command (implemented in `tools/cat.hpp`) supports piping via `--pipe <command>` (data is streamed to the command's STDIN). Capture of the piped command output is not provided; consumers should redirect output within the command itself.

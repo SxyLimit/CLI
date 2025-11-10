@@ -14,7 +14,7 @@ struct Llm {
     set_tool_help_locale(spec, "en", "llm call <message...> | llm recall");
     set_tool_help_locale(spec, "zh", "llm call <消息...> | llm recall");
     spec.subs = {
-      SubcommandSpec{"call", {}, {"<message...>"}, {}, nullptr},
+      SubcommandSpec{"call", {}, {positional("<message...>")}, {}, nullptr},
       SubcommandSpec{"recall", {}, {}, {}, nullptr}
     };
     return spec;

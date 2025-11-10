@@ -15,7 +15,7 @@ struct Ls {
       {"-a", false, {}, nullptr, false, "", false},
       {"-l", false, {}, nullptr, false, "", false}
     };
-    spec.positional = {"[<dir>]"};
+    spec.positional = {positional("[<dir>]")};
     return spec;
   }
 

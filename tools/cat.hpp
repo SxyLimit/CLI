@@ -11,7 +11,7 @@ struct Cat {
     spec.summary = "Print file content (<=1MB, UTF-8)";
     set_tool_summary_locale(spec, "en", "Print file content (<=1MB, UTF-8)");
     set_tool_summary_locale(spec, "zh", "输出文件内容（<=1MB，UTF-8）");
-    spec.positional = {"<file>"};
+    spec.positional = {positional("<file>")};
     spec.options = {
       {"--pipe", true, {}, nullptr, false, "<command>", false}
     };
