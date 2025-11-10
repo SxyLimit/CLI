@@ -253,7 +253,7 @@ static std::string config_file_path(const std::string& name){
 
 const std::string& settings_file_path(){
   static std::string path;
-  path = config_file_path("mycli_settings.json");
+  path = config_file_path("mycli_settings.conf");
   return path;
 }
 
@@ -261,14 +261,14 @@ static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18
   {"show_usage",         {{"en", "usage: show [LICENSE|MyCLI]"}, {"zh", "用法：show [LICENSE|MyCLI]"}}},
   {"show_license_error", {{"en", "Failed to read LICENSE file."}, {"zh", "读取 LICENSE 文件失败。"}}},
   {"show_mycli_version", {{"en", "CLI Demo v0.0.1"}, {"zh", "CLI 演示 v0.0.1"}}},
-  {"setting_get_usage",   {{"en", "usage: setting get <key>"}, {"zh", "用法：setting get <key>"}}},
+  {"setting_get_usage",   {{"en", "usage: setting get [path...]"}, {"zh", "用法：setting get [路径...]"}}},
   {"setting_unknown_key", {{"en", "unknown setting key: {key}"}, {"zh", "未知设置项：{key}"}}},
   {"setting_get_value",   {{"en", "setting {key} = {value}"}, {"zh", "设置 {key} = {value}"}}},
   {"setting_set_usage",   {{"en", "usage: setting set <key> <value>"}, {"zh", "用法：setting set <key> <value>"}}},
   {"setting_invalid_value", {{"en", "invalid value for {key}: {value}"}, {"zh", "设置 {key} 的值无效：{value}"}}},
   {"setting_set_success", {{"en", "updated {key} -> {value}"}, {"zh", "已更新 {key} -> {value}"}}},
   {"setting_list_header", {{"en", "Available setting keys:"}, {"zh", "可用设置项："}}},
-  {"setting_usage",       {{"en", "usage: setting <get|set|list>"}, {"zh", "用法：setting <get|set|list>"}}},
+  {"setting_usage",       {{"en", "usage: setting <get|set>"}, {"zh", "用法：setting <get|set>"}}},
   {"cd_mode_updated",    {{"en", "prompt cwd mode set to {mode}"}, {"zh", "提示符目录模式已设为 {mode}"}}},
   {"cd_mode_error",      {{"en", "failed to update prompt mode"}, {"zh", "更新提示符模式失败"}}},
   {"cd_usage",           {{"en", "usage: cd <path> | cd -o [-a|-c]"}, {"zh", "用法：cd <path> | cd -o [-a|-c]"}}},
@@ -288,8 +288,39 @@ static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18
   {"unknown_command",        {{"en", "unknown command: {name}"}, {"zh", "未知命令：{name}"}}},
   {"path_error_missing",     {{"en", "missing"}, {"zh", "不存在"}}},
   {"path_error_need_dir",    {{"en", "needs directory"}, {"zh", "需要目录"}}},
-  {"path_error_need_file",   {{"en", "needs file"}, {"zh", "需要文件"}}}
+  {"path_error_need_file",   {{"en", "needs file"}, {"zh", "需要文件"}}},
+  {"path_error_need_extension", {{"en", "needs extension: {ext}"}, {"zh", "需要后缀：{ext}"}}}
 };
+
+static std::vector<std::string> positionalPlaceholders(const std::vector<PositionalArgSpec>& specs){
+  std::vector<std::string> out;
+  out.reserve(specs.size());
+  for(const auto& spec : specs){
+    out.push_back(spec.placeholder);
+  }
+  return out;
+}
+
+static std::string joinPositionalPlaceholders(const std::vector<PositionalArgSpec>& specs){
+  return join(positionalPlaceholders(specs));
+}
+
+static std::vector<std::string> normalizeExtensions(const std::vector<std::string>& exts){
+  std::vector<std::string> normalized;
+  normalized.reserve(exts.size());
+  for(const auto& ext : exts){
+    if(ext.empty()) continue;
+    std::string norm = ext;
+    if(norm.front() != '.') norm.insert(norm.begin(), '.');
+    std::transform(norm.begin(), norm.end(), norm.begin(), [](unsigned char c){
+      return static_cast<char>(std::tolower(c));
+    });
+    if(!norm.empty()) normalized.push_back(norm);
+  }
+  std::sort(normalized.begin(), normalized.end());
+  normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+  return normalized;
+}
 
 struct MessageWatcherState {
   std::string folder;
@@ -299,7 +330,13 @@ struct MessageWatcherState {
 
 static MessageWatcherState g_message_watcher;
 
-static std::vector<PromptBadge> g_prompt_badges;
+struct PromptIndicatorEntry {
+  PromptIndicatorDescriptor desc;
+  PromptIndicatorState state;
+};
+
+static std::vector<std::string> g_prompt_indicator_order;
+static std::map<std::string, PromptIndicatorEntry> g_prompt_indicators;
 
 struct LlmWatcherState {
   std::string path;
@@ -311,6 +348,7 @@ struct LlmWatcherState {
 };
 
 static LlmWatcherState g_llm_watcher;
+static bool g_llm_pending = false;
 
 static std::string joinPath(const std::string& dir, const std::string& name){
   if(dir.empty()) return name;
@@ -379,6 +417,11 @@ void message_poll(){
     else ++it;
   }
   g_message_watcher.known = std::move(current);
+  bool unread = message_has_unread();
+  PromptIndicatorState state = prompt_indicator_current("message");
+  state.visible = unread;
+  state.textColor = unread ? ansi::RED : ansi::WHITE;
+  update_prompt_indicator("message", state);
 }
 
 bool message_has_unread(){
@@ -445,6 +488,11 @@ bool message_mark_read(const std::string& path){
   auto it = g_message_watcher.known.find(path);
   if(it==g_message_watcher.known.end()) return false;
   g_message_watcher.seen[path] = it->second;
+  bool unread = message_has_unread();
+  PromptIndicatorState state = prompt_indicator_current("message");
+  state.visible = unread;
+  state.textColor = unread ? ansi::RED : ansi::WHITE;
+  update_prompt_indicator("message", state);
   return true;
 }
 
@@ -484,8 +532,38 @@ std::vector<std::string> message_all_file_labels(){
   return labels;
 }
 
-void register_prompt_badge(const PromptBadge& badge){
-  g_prompt_badges.push_back(badge);
+void register_prompt_indicator(const PromptIndicatorDescriptor& desc){
+  if(desc.id.empty()) return;
+  PromptIndicatorEntry entry;
+  entry.desc = desc;
+  entry.state.text = desc.text;
+  entry.state.bracketColor = desc.bracketColor;
+  auto inserted = g_prompt_indicators.emplace(desc.id, entry);
+  if(inserted.second){
+    g_prompt_indicator_order.push_back(desc.id);
+  }else{
+    inserted.first->second.desc = desc;
+    inserted.first->second.state.text = desc.text;
+    inserted.first->second.state.bracketColor = desc.bracketColor;
+  }
+}
+
+void update_prompt_indicator(const std::string& id, const PromptIndicatorState& state){
+  auto it = g_prompt_indicators.find(id);
+  if(it == g_prompt_indicators.end()) return;
+  PromptIndicatorState next = state;
+  if(next.text.empty()) next.text = it->second.desc.text;
+  if(next.bracketColor.empty()) next.bracketColor = it->second.desc.bracketColor;
+  it->second.state = next;
+}
+
+PromptIndicatorState prompt_indicator_current(const std::string& id){
+  auto it = g_prompt_indicators.find(id);
+  if(it == g_prompt_indicators.end()) return PromptIndicatorState{};
+  PromptIndicatorState state = it->second.state;
+  if(state.text.empty()) state.text = it->second.desc.text;
+  if(state.bracketColor.empty()) state.bracketColor = it->second.desc.bracketColor;
+  return state;
 }
 
 static std::string resolve_llm_history_path(){
@@ -520,6 +598,20 @@ void llm_poll(){
     g_llm_watcher.seenMtime = 0;
     g_llm_watcher.seenSize = 0;
   }
+  if(llm_has_unread()){
+    g_llm_pending = false;
+  }
+  bool unread = llm_has_unread();
+  PromptIndicatorState state = prompt_indicator_current("llm");
+  state.visible = unread || g_llm_pending;
+  if(unread){
+    state.textColor = ansi::RED;
+  }else if(g_llm_pending){
+    state.textColor = ansi::YELLOW;
+  }else{
+    state.textColor = ansi::WHITE;
+  }
+  update_prompt_indicator("llm", state);
 }
 
 bool llm_has_unread(){
@@ -532,6 +624,21 @@ void llm_mark_seen(){
   if(!g_llm_watcher.initialized) llm_initialize();
   g_llm_watcher.seenMtime = g_llm_watcher.knownMtime;
   g_llm_watcher.seenSize = g_llm_watcher.knownSize;
+}
+
+void llm_set_pending(bool pending){
+  g_llm_pending = pending;
+  bool unread = llm_has_unread();
+  PromptIndicatorState state = prompt_indicator_current("llm");
+  state.visible = unread || g_llm_pending;
+  if(unread){
+    state.textColor = ansi::RED;
+  }else if(g_llm_pending){
+    state.textColor = ansi::YELLOW;
+  }else{
+    state.textColor = ansi::WHITE;
+  }
+  update_prompt_indicator("llm", state);
 }
 
 static void persist_home_path_to_env(const std::string& path){
@@ -612,7 +719,7 @@ bool set_config_home(const std::string& path, std::string& error){
     }
     return true;
   };
-  if(!move_file("mycli_settings.json") ||
+  if(!move_file("mycli_settings.conf") ||
      !move_file("mycli_tools.conf") ||
      !move_file("mycli_llm_history.json")){
     error = "fs_error";
@@ -658,30 +765,53 @@ static std::string plainPromptText(){
   return promptNamePlain() + "> ";
 }
 
-static std::string promptBadgesPlainText(){
-  std::set<char> letters;
-  for(const auto& badge : g_prompt_badges){
-    if(badge.letter==0) continue;
-    bool active = false;
-    try{
-      if(badge.active) active = badge.active();
-    }catch(...){
-      active = false;
+struct PromptIndicatorRender {
+  std::string plain;
+  std::string colored;
+};
+
+static PromptIndicatorRender promptIndicatorsRender(){
+  PromptIndicatorRender render;
+  bool any = false;
+  std::string bracketColor = ansi::WHITE;
+  for(const auto& id : g_prompt_indicator_order){
+    auto it = g_prompt_indicators.find(id);
+    if(it == g_prompt_indicators.end()) continue;
+    PromptIndicatorState state = prompt_indicator_current(id);
+    if(!state.visible) continue;
+    std::string text = state.text;
+    if(text.empty()) continue;
+    if(!any){
+      bracketColor = state.bracketColor.empty()? ansi::WHITE : state.bracketColor;
+      render.plain.push_back('[');
+      render.colored += bracketColor;
+      render.colored.push_back('[');
+      render.colored += ansi::RESET;
+      any = true;
     }
-    if(active) letters.insert(badge.letter);
+    std::string color = state.textColor.empty()? ansi::WHITE : state.textColor;
+    render.plain += text;
+    render.colored += color;
+    render.colored += text;
+    render.colored += ansi::RESET;
   }
-  if(letters.empty()) return std::string();
-  std::string text;
-  text.reserve(letters.size()+2);
-  text.push_back('[');
-  for(char c : letters) text.push_back(c);
-  text.push_back(']');
-  return text;
+  if(any){
+    render.plain.push_back(']');
+    render.colored += bracketColor;
+    render.colored.push_back(']');
+    render.colored += ansi::RESET;
+  }
+  return render;
 }
 
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value){
   spec.summaryLocales[lang] = value;
   if(lang=="en" && spec.summary.empty()) spec.summary = value;
+}
+
+void set_tool_help_locale(ToolSpec& spec, const std::string& lang, const std::string& value){
+  spec.helpLocales[lang] = value;
+  if(lang=="en" && spec.help.empty()) spec.help = value;
 }
 
 std::string localized_tool_summary(const ToolSpec& spec){
@@ -690,6 +820,14 @@ std::string localized_tool_summary(const ToolSpec& spec){
   auto en = spec.summaryLocales.find("en");
   if(en!=spec.summaryLocales.end() && !en->second.empty()) return en->second;
   return spec.summary;
+}
+
+std::string localized_tool_help(const ToolSpec& spec){
+  auto it = spec.helpLocales.find(g_settings.language);
+  if(it!=spec.helpLocales.end() && !it->second.empty()) return it->second;
+  auto en = spec.helpLocales.find("en");
+  if(en!=spec.helpLocales.end() && !en->second.empty()) return en->second;
+  return spec.help;
 }
 
 std::string tr(const std::string& key){
@@ -1314,8 +1452,8 @@ static int highlightCursorOffset(const std::string& label, const std::vector<int
 }
 
 static int promptDisplayWidth(){
-  std::string badges = promptBadgesPlainText();
-  return displayWidth(badges + plainPromptText());
+  auto indicators = promptIndicatorsRender();
+  return displayWidth(indicators.plain + plainPromptText());
 }
 
 // helper: 是否“路径型占位符”
@@ -1332,13 +1470,27 @@ static PathKind placeholderPathKind(const std::string& ph){
   return PathKind::Any;
 }
 
+static bool positionalSpecIsPath(const PositionalArgSpec& spec){
+  if(spec.isPath) return true;
+  if(spec.inferFromPlaceholder) return isPathLikePlaceholder(spec.placeholder);
+  return false;
+}
+
+static PathKind positionalSpecKind(const PositionalArgSpec& spec){
+  if(spec.pathKind != PathKind::Any) return spec.pathKind;
+  if(spec.inferFromPlaceholder) return placeholderPathKind(spec.placeholder);
+  return PathKind::Any;
+}
+
 struct PathCompletionContext {
   bool active = false;
   bool appliesToCurrentWord = false;
   PathKind kind = PathKind::Any;
+  std::vector<std::string> extensions;
+  bool allowDirectory = true;
 };
 
-static PathCompletionContext analyzePositionalPathContext(const std::vector<std::string>& posDefs,
+static PathCompletionContext analyzePositionalPathContext(const std::vector<PositionalArgSpec>& posDefs,
                                                          size_t startIdx,
                                                          const std::vector<OptionSpec>& opts,
                                                          const std::vector<std::string>& toks,
@@ -1387,11 +1539,15 @@ static PathCompletionContext analyzePositionalPathContext(const std::vector<std:
 
   if(!(trailingSpace || currentWordIsPositional)) return ctx;
 
-  if(posFilled < posDefs.size() && isPathLikePlaceholder(posDefs[posFilled])){
+  if(posFilled < posDefs.size() && positionalSpecIsPath(posDefs[posFilled])){
     ctx.active = true;
     ctx.appliesToCurrentWord = currentWordIsPositional;
-    PathKind kind = placeholderPathKind(posDefs[posFilled]);
-    ctx.kind = kind;
+    ctx.kind = positionalSpecKind(posDefs[posFilled]);
+    ctx.extensions = posDefs[posFilled].allowedExtensions;
+    ctx.allowDirectory = posDefs[posFilled].allowDirectory;
+    if(!ctx.extensions.empty() && ctx.kind == PathKind::Any){
+      ctx.kind = PathKind::File;
+    }
   }
   return ctx;
 }
@@ -1423,6 +1579,7 @@ static Candidates firstWordCandidates(const std::string& buf){
   for(auto&s:names){
     MatchResult match = compute_match(s, sw.word);
     if(!match.matched) continue;
+    if(match.exact && s == sw.word) continue;
     out.items.push_back(sw.before + s);
     out.labels.push_back(s);
     out.matchPositions.push_back(match.positions);
@@ -1544,7 +1701,8 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       if(o.name==prev && o.takesValue){
         if(o.isPath) {
           PathKind kind = (o.pathKind != PathKind::Any) ? o.pathKind : placeholderPathKind(o.placeholder);
-          out = pathCandidatesForWord(buf, sw.word, kind);
+          const std::vector<std::string>* extPtr = o.allowedExtensions.empty() ? nullptr : &o.allowedExtensions;
+          out = pathCandidatesForWord(buf, sw.word, kind, extPtr, o.allowDirectory);
           return true;
         }
         std::vector<std::string> vals = o.valueSuggestions;
@@ -1567,7 +1725,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
   }
 
   // 如果“下一个位置参数占位符”为路径型 → 直接进入路径补全（无需 ./ 或 /）
-  auto positionalContext = [&](const std::vector<std::string>& posDefs, size_t startIdx, const std::vector<OptionSpec>& opts){
+  auto positionalContext = [&](const std::vector<PositionalArgSpec>& posDefs, size_t startIdx, const std::vector<OptionSpec>& opts){
     return analyzePositionalPathContext(posDefs, startIdx, opts, toks, sw, buf);
   };
 
@@ -1576,12 +1734,14 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
     combinedOpts.insert(combinedOpts.end(), sub->options.begin(), sub->options.end());
     auto ctx = positionalContext(sub->positional, /*startIdx*/2, combinedOpts);
     if(ctx.active){
-      return pathCandidatesForWord(buf, sw.word, ctx.kind);
+      const std::vector<std::string>* extPtr = ctx.extensions.empty() ? nullptr : &ctx.extensions;
+      return pathCandidatesForWord(buf, sw.word, ctx.kind, extPtr, ctx.allowDirectory);
     }
   }else{
     auto ctx = positionalContext(spec.positional, /*startIdx*/1, spec.options);
     if(ctx.active){
-      return pathCandidatesForWord(buf, sw.word, ctx.kind);
+      const std::vector<std::string>* extPtr = ctx.extensions.empty() ? nullptr : &ctx.extensions;
+      return pathCandidatesForWord(buf, sw.word, ctx.kind, extPtr, ctx.allowDirectory);
     }
   }
 
@@ -1610,7 +1770,7 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
 
   // 路径模式（兜底）
   if(startsWith(sw.word,"/")||startsWith(sw.word,"./")||startsWith(sw.word,"../")){
-    return pathCandidatesForWord(buf, sw.word, PathKind::Any);
+    return pathCandidatesForWord(buf, sw.word, PathKind::Any, nullptr, true);
   }
 
   return out;
@@ -1676,7 +1836,12 @@ static Candidates computeCandidates(const std::string& buf){
   }
 
   if(toks.empty()) return firstWordCandidates(buf);
-  if(const ToolSpec* spec = REG.find(toks[0])) return candidatesForTool(*spec, buf);
+  if(const ToolDefinition* def = REG.find(toks[0])){
+    if(def->completion){
+      return def->completion(buf, toks);
+    }
+    return candidatesForTool(def->ui, buf);
+  }
   return firstWordCandidates(buf);
 }
 
@@ -1688,18 +1853,21 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   if(!g_settings.showPathErrorHint) return std::nullopt;
 
   if(toks[0] == "help") return std::nullopt;
-  const ToolSpec* spec = REG.find(toks[0]);
-  if(!spec) return std::nullopt;
+  const ToolDefinition* def = REG.find(toks[0]);
+  if(!def) return std::nullopt;
+  const ToolSpec& spec = def->ui;
 
   const SubcommandSpec* sub = nullptr;
-  if(!spec->subs.empty() && toks.size()>=2){
-    for(auto &s : spec->subs){
+  if(!spec.subs.empty() && toks.size()>=2){
+    for(const auto &s : spec.subs){
       if(s.name == toks[1]){ sub = &s; break; }
     }
   }
 
   PathKind expected = PathKind::Any;
   bool hasExpectation = false;
+  std::vector<std::string> requiredExtensions;
+  bool allowDirectory = true;
 
   auto findPathOpt = [&](const std::vector<OptionSpec>& opts)->const OptionSpec*{
     if(toks.size()<2 || toks.back()!=sw.word) return nullptr;
@@ -1712,29 +1880,40 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
 
   const OptionSpec* opt = nullptr;
   if(sub){ opt = findPathOpt(sub->options); }
-  if(!opt) opt = findPathOpt(spec->options);
+  if(!opt) opt = findPathOpt(spec.options);
   if(opt){
     expected = (opt->pathKind != PathKind::Any) ? opt->pathKind : placeholderPathKind(opt->placeholder);
+    if(!opt->allowedExtensions.empty() && expected == PathKind::Any){
+      expected = PathKind::File;
+    }
+    requiredExtensions = opt->allowedExtensions;
+    allowDirectory = opt->allowDirectory;
     hasExpectation = true;
   } else {
     if(sub){
-      std::vector<OptionSpec> combinedOpts = spec->options;
+      std::vector<OptionSpec> combinedOpts = spec.options;
       combinedOpts.insert(combinedOpts.end(), sub->options.begin(), sub->options.end());
       auto ctx = analyzePositionalPathContext(sub->positional, /*startIdx*/2, combinedOpts, toks, sw, buf);
       if(ctx.appliesToCurrentWord){
         expected = ctx.kind;
+        requiredExtensions = ctx.extensions;
+        allowDirectory = ctx.allowDirectory;
         hasExpectation = true;
       }
     } else {
-      auto ctx = analyzePositionalPathContext(spec->positional, /*startIdx*/1, spec->options, toks, sw, buf);
+      auto ctx = analyzePositionalPathContext(spec.positional, /*startIdx*/1, spec.options, toks, sw, buf);
       if(ctx.appliesToCurrentWord){
         expected = ctx.kind;
+        requiredExtensions = ctx.extensions;
+        allowDirectory = ctx.allowDirectory;
         hasExpectation = true;
       }
     }
   }
 
   if(!hasExpectation) return std::nullopt;
+
+  auto normalizedExts = normalizeExtensions(requiredExtensions);
 
   struct stat st{};
   if(::stat(sw.word.c_str(), &st)!=0){
@@ -1760,6 +1939,10 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
     return false;
   };
 
+  if(!allowDirectory && isDir && expected != PathKind::Dir){
+    return tr("path_error_need_file");
+  }
+
   if(expected == PathKind::Dir && !isDir){
     if(hasMatchingCandidateOfType(PathKind::Dir)) return std::nullopt;
     return tr("path_error_need_dir");
@@ -1767,6 +1950,17 @@ static std::optional<std::string> detectPathErrorMessage(const std::string& buf,
   if(expected == PathKind::File && !isFile){
     if(hasMatchingCandidateOfType(PathKind::File)) return std::nullopt;
     return tr("path_error_need_file");
+  }
+
+  if(!normalizedExts.empty() && isFile){
+    auto pos = sw.word.find_last_of('.');
+    std::string ext = (pos == std::string::npos) ? std::string() : sw.word.substr(pos);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){
+      return static_cast<char>(std::tolower(c));
+    });
+    if(std::find(normalizedExts.begin(), normalizedExts.end(), ext) == normalizedExts.end()){
+      return trFmt("path_error_need_extension", {{"ext", join(normalizedExts, "|")}});
+    }
   }
   return std::nullopt;
 }
@@ -1778,26 +1972,26 @@ static std::string contextGhostFor(const std::string& buf){
     if(toks.size()==1) return " <command>";
     return "";
   }
-  const ToolSpec* spec = REG.find(toks[0]); if(!spec) return "";
-  if(inSubcommandSlot(*spec, toks)) return " <subcommand>";
-  if(!spec->subs.empty() && toks.size()>=2){
-    for(auto &sub: spec->subs){
+  const ToolDefinition* def = REG.find(toks[0]); if(!def) return "";
+  if(inSubcommandSlot(def->ui, toks)) return " <subcommand>";
+  if(!def->ui.subs.empty() && toks.size()>=2){
+    for(auto &sub: def->ui.subs){
       if(sub.name==toks[1]){
         std::set<std::string> used;
         for(size_t i=2;i<toks.size();++i)
           if(startsWith(toks[i],"--")||startsWith(toks[i],"-")) used.insert(toks[i]);
-        return renderSubGhost(*spec, sub, toks, 1, used);
+        return renderSubGhost(def->ui, sub, toks, 1, used);
       }
     }
   }
-  return renderCommandGhost(*spec, toks);
+  return renderCommandGhost(def->ui, toks);
 }
 
 // ===== Rendering =====
 static void renderPromptLabel(){
-  std::string badges = promptBadgesPlainText();
-  if(!badges.empty()){
-    std::cout << ansi::RED << ansi::BOLD << badges << ansi::RESET;
+  auto indicator = promptIndicatorsRender();
+  if(!indicator.plain.empty()){
+    std::cout << indicator.colored;
   }
   const std::string name = promptNamePlain();
   const std::string theme = g_settings.promptTheme;
@@ -1879,22 +2073,42 @@ static void renderBelowThree(const std::string& status, int status_len,
 // ===== Exec & help =====
 static void execToolLine(const std::string& line){
   auto toks = splitTokens(line); if(toks.empty()) return;
-  const ToolSpec* spec = REG.find(toks[0]); if(!spec){ std::cout<<trFmt("unknown_command", {{"name", toks[0]}})<<"\n"; return; }
-  if(!spec->subs.empty() && toks.size()>=2){
-    for(auto &sub: spec->subs){ if(sub.name == toks[1]){ if(sub.handler){ sub.handler(toks); return; } } }
+  const ToolDefinition* def = REG.find(toks[0]); if(!def){ std::cout<<trFmt("unknown_command", {{"name", toks[0]}})<<"\n"; return; }
+  if(!def->executor){ std::cout<<"no handler\n"; return; }
+  ToolExecutionRequest req;
+  req.tokens = toks;
+  req.silent = false;
+  req.forLLM = false;
+  ToolExecutionResult result = def->executor(req);
+  std::string out = result.viewForCli();
+  if(!out.empty()) std::cout<<out;
+}
+
+ToolExecutionResult invoke_registered_tool(const std::string& line, bool silent){
+  ToolExecutionRequest req;
+  req.tokens = splitTokens(line);
+  req.silent = silent;
+  req.forLLM = true;
+  if(req.tokens.empty()) return ToolExecutionResult{};
+  const ToolDefinition* def = REG.find(req.tokens[0]);
+  if(!def || !def->executor){
+    ToolExecutionResult res;
+    res.exitCode = 1;
+    res.output = trFmt("unknown_command", {{"name", req.tokens[0]}}) + "\n";
+    res.display = res.output;
+    return res;
   }
-  if(spec->handler){ spec->handler(toks); return; }
-  std::cout<<"no handler\n";
+  return def->executor(req);
 }
 static void printHelpAll(){
   auto names = REG.listNames();
   std::cout<<tr("help_available_commands")<<"\n";
   std::cout<<tr("help_command_summary")<<"\n";
   for(auto &n:names){
-    const ToolSpec* t=REG.find(n);
+    const ToolDefinition* t=REG.find(n);
     std::cout<<"  "<<n;
     if(t){
-      std::string summary = localized_tool_summary(*t);
+      std::string summary = localized_tool_summary(t->ui);
       if(!summary.empty()) std::cout<<"  - "<<summary;
     }
     std::cout<<"\n";
@@ -1902,16 +2116,19 @@ static void printHelpAll(){
   std::cout<<tr("help_use_command")<<"\n";
 }
 static void printHelpOne(const std::string& name){
-  const ToolSpec* t = REG.find(name);
-  if(!t){ std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return; }
-  std::string summary = localized_tool_summary(*t);
+  const ToolDefinition* def = REG.find(name);
+  if(!def){ std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return; }
+  const ToolSpec& spec = def->ui;
+  std::string summary = localized_tool_summary(spec);
   if(summary.empty()) std::cout<<name<<"\n";
   else std::cout<<name<<" - "<<summary<<"\n";
-  if(!t->subs.empty()){
+  std::string helpText = localized_tool_help(spec);
+  if(!helpText.empty()) std::cout<<helpText<<"\n";
+  if(!spec.subs.empty()){
     std::cout<<tr("help_subcommands")<<"\n";
-    for(auto &s:t->subs){
+    for(auto &s:spec.subs){
       std::cout<<"    "<<s.name;
-      if(!s.positional.empty()) std::cout<<" "<<join(s.positional);
+      if(!s.positional.empty()) std::cout<<" "<<joinPositionalPlaceholders(s.positional);
       if(!s.options.empty())    std::cout<<"  [options]";
       std::cout<<"\n";
       if(!s.options.empty()){
@@ -1920,6 +2137,10 @@ static void printHelpOne(const std::string& name){
           if(o.takesValue) std::cout<<" "<<(o.placeholder.empty()? "<val>":o.placeholder);
           if(o.required)   std::cout<<tr("help_required_tag");
           if(o.isPath)     std::cout<<tr("help_path_tag");
+          if(!o.allowedExtensions.empty()){
+            auto exts = normalizeExtensions(o.allowedExtensions);
+            if(!exts.empty()) std::cout<<" ["<<join(exts, "|")<<"]";
+          }
           if(!o.valueSuggestions.empty()){
             std::cout<<"  {"; for(size_t i=0;i<o.valueSuggestions.size();++i){ if(i) std::cout<<","; std::cout<<o.valueSuggestions[i]; } std::cout<<"}";
           }
@@ -1928,21 +2149,25 @@ static void printHelpOne(const std::string& name){
       }
     }
   }
-  if(!t->options.empty()){
+  if(!spec.options.empty()){
     std::cout<<tr("help_options")<<"\n";
-    for(auto &o:t->options){
+    for(auto &o:spec.options){
       std::cout<<"    "<<o.name;
       if(o.takesValue) std::cout<<" "<<(o.placeholder.empty()? "<val>":o.placeholder);
       if(o.required)   std::cout<<tr("help_required_tag");
       if(o.isPath)     std::cout<<tr("help_path_tag");
+      if(!o.allowedExtensions.empty()){
+        auto exts = normalizeExtensions(o.allowedExtensions);
+        if(!exts.empty()) std::cout<<" ["<<join(exts, "|")<<"]";
+      }
       if(!o.valueSuggestions.empty()){
         std::cout<<"  {"; for(size_t i=0;i<o.valueSuggestions.size();++i){ if(i) std::cout<<","; std::cout<<o.valueSuggestions[i]; } std::cout<<"}";
       }
       std::cout<<"\n";
     }
   }
-  if(!t->positional.empty()){
-    std::cout<<trFmt("help_positional", {{"value", join(t->positional)}})<<"\n";
+  if(!spec.positional.empty()){
+    std::cout<<trFmt("help_positional", {{"value", joinPositionalPlaceholders(spec.positional)}})<<"\n";
   }
 }
 
@@ -1954,8 +2179,8 @@ int main(){
   message_set_watch_folder(g_settings.messageWatchFolder);
   llm_initialize();
 
-  register_prompt_badge(PromptBadge{"message", 'M', [](){ return message_has_unread(); }});
-  register_prompt_badge(PromptBadge{"llm", 'L', [](){ return llm_has_unread(); }});
+  register_prompt_indicator(PromptIndicatorDescriptor{"message", "M"});
+  register_prompt_indicator(PromptIndicatorDescriptor{"llm", "L"});
 
   // 1) 注册内置工具与状态
   register_all_tools();
@@ -2011,7 +2236,13 @@ int main(){
     total = static_cast<int>(cand.labels.size());
     haveCand = total > 0;
     if(haveCand && sel >= total) sel = 0;
-    contextGhost = haveCand ? std::string() : contextGhostFor(buf);
+    bool showInlineSuggestion = haveCand;
+    if(showInlineSuggestion){
+      if(sel >= static_cast<int>(cand.items.size()) || cand.items[sel].rfind(buf, 0) != 0){
+        showInlineSuggestion = false;
+      }
+    }
+    contextGhost = (haveCand && showInlineSuggestion) ? std::string() : contextGhostFor(buf);
     auto pathError = detectPathErrorMessage(buf, cand);
 
     std::cout << ansi::CLR
@@ -2021,7 +2252,7 @@ int main(){
     if(pathError){
       std::cout << ansi::RED << sw.word << ansi::RESET
                 << "  " << ansi::YELLOW << "+" << *pathError << ansi::RESET;
-    }else if(haveCand){
+    }else if(showInlineSuggestion){
       const std::string& label = cand.labels[sel];
       const std::vector<int>& matches = cand.matchPositions[sel];
       std::string rendered = renderHighlightedLabel(label, matches);
@@ -2043,7 +2274,7 @@ int main(){
     int cursorCol = baseIndent;
     if(pathError){
       cursorCol += displayWidth(sw.word);
-    }else if(haveCand){
+    }else if(showInlineSuggestion){
       int offset = highlightCursorOffset(cand.labels[sel], cand.matchPositions[sel]);
       if(sel < cand.annotations.size() && !cand.annotations[sel].empty() && sw.word.empty()){
         offset = 0;
