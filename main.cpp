@@ -261,7 +261,7 @@ const std::string& settings_file_path(){
 static std::unordered_map<std::string, std::map<std::string, std::string>> g_i18n = {
   {"show_usage",         {{"en", "usage: show [LICENSE|MyCLI]"}, {"zh", "用法：show [LICENSE|MyCLI]"}}},
   {"show_license_error", {{"en", "Failed to read LICENSE file."}, {"zh", "读取 LICENSE 文件失败。"}}},
-  {"show_mycli_version", {{"en", "CLI Demo v0.0.1"}, {"zh", "CLI 演示 v0.0.1"}}},
+  {"show_mycli_version", {{"en", "MyCLI Demo Version 0.0.1"}, {"zh", "MyCLI 演示版本 0.0.1"}}},
   {"setting_get_usage",   {{"en", "usage: setting get [path...]"}, {"zh", "用法：setting get [路径...]"}}},
   {"setting_unknown_key", {{"en", "unknown setting key: {key}"}, {"zh", "未知设置项：{key}"}}},
   {"setting_get_value",   {{"en", "setting {key} = {value}"}, {"zh", "设置 {key} = {value}"}}},
