@@ -386,44 +386,37 @@ struct Setting {
     spec.summary = "Manage CLI settings";
     set_tool_summary_locale(spec, "en", "Manage CLI settings");
     set_tool_summary_locale(spec, "zh", "管理 CLI 设置");
-    set_tool_help_locale(spec, "en", "setting <list|get|set> <segments...> [value]");
-    set_tool_help_locale(spec, "zh", "setting <list|get|set> <分段...> [值]");
+    set_tool_help_locale(spec, "en", "setting get [segments...] | setting set <segments...> <value>");
+    set_tool_help_locale(spec, "zh", "setting get [分段...] | setting set <分段...> <值>");
     return spec;
   }
 
   static ToolExecutionResult run(const ToolExecutionRequest& request){
     const auto& args = request.tokens;
+    auto usage = tr("setting_usage") + "\n";
     if(args.size() < 2){
       g_parse_error_cmd = "setting";
-      return detail::text_result("usage: setting <list|get|set> <path...> [value]\n", 1);
+      return detail::text_result(usage, 1);
     }
 
     std::string action = args[1];
-    if(action != "list" && action != "get" && action != "set"){
+    if(action != "get" && action != "set"){
       g_parse_error_cmd = "setting";
-      return detail::text_result("usage: setting <list|get|set> <path...> [value]\n", 1);
-    }
-
-    if(action == "list"){
-      std::vector<std::string> segments(args.begin() + 2, args.end());
-      std::string prefix = join_setting_segments(segments);
-      auto keys = settings_list_keys();
-      std::ostringstream oss;
-      oss << tr("setting_list_header") << "\n";
-      for(const auto& item : keys){
-        if(!prefix.empty() && item.rfind(prefix, 0) != 0) continue;
-        std::string value;
-        settings_get_value(item, value);
-        oss << "  " << item << " = " << value << "\n";
-      }
-      return detail::text_result(oss.str());
+      return detail::text_result(usage, 1);
     }
 
     if(action == "get"){
       std::vector<std::string> segments(args.begin() + 2, args.end());
       if(segments.empty()){
-        g_parse_error_cmd = "setting";
-        return detail::text_result("setting: key required\n", 1);
+        auto keys = settings_list_keys();
+        std::ostringstream oss;
+        oss << tr("setting_list_header") << "\n";
+        for(const auto& item : keys){
+          std::string value;
+          if(!settings_get_value(item, value)) continue;
+          oss << "  " << item << " = " << value << "\n";
+        }
+        return detail::text_result(oss.str());
       }
       std::string prefix = join_setting_segments(segments);
       std::string prefixDot = prefix + ".";
@@ -437,7 +430,7 @@ struct Setting {
       auto keys = settings_list_keys();
       for(const auto& item : keys){
         if(item == prefix) continue;
-        if(item.rfind(prefixDot, 0) != 0) continue;
+        if(!startsWith(item, prefixDot)) continue;
         std::string childValue;
         if(!settings_get_value(item, childValue)) continue;
         oss << "  " << item << " = " << childValue << "\n";
@@ -452,7 +445,7 @@ struct Setting {
 
     if(args.size() < 3){
       g_parse_error_cmd = "setting";
-      return detail::text_result("setting: key required\n", 1);
+      return detail::text_result(tr("setting_set_usage") + "\n", 1);
     }
 
     auto keys = settings_list_keys();
@@ -477,7 +470,7 @@ struct Setting {
 
     if(firstValueIndex >= args.size()){
       g_parse_error_cmd = "setting";
-      return detail::text_result("usage: setting set <path...> <value>\n", 1);
+      return detail::text_result(tr("setting_set_usage") + "\n", 1);
     }
 
     std::string key = join_setting_segments(best);
@@ -504,7 +497,7 @@ struct Setting {
 
     SplitWord sw = splitLastWord(buffer);
     bool endsWithSpace = !buffer.empty() && std::isspace(static_cast<unsigned char>(buffer.back()));
-    const std::vector<std::string> actionsVec = {"list", "get", "set"};
+    const std::vector<std::string> actionsVec = {"get", "set"};
     const std::set<std::string> actions(actionsVec.begin(), actionsVec.end());
 
     auto pushActionCandidate = [&](const std::string& label, const std::string& pattern){
@@ -530,7 +523,6 @@ struct Setting {
     auto addCandidate = [&](const std::string& label, bool appendSpace, const std::string& pattern){
       MatchResult match = compute_match(label, pattern);
       if(!match.matched) return;
-      if(!endsWithSpace && match.exact && label == sw.word) return;
       std::string item = sw.before + label;
       if(appendSpace) item += ' ';
       cand.items.push_back(item);
@@ -588,7 +580,7 @@ struct Setting {
       sortCandidatesByMatch(pattern, cand);
     };
 
-    if(actionToken == "list" || actionToken == "get"){
+    if(actionToken == "get"){
       addSegmentCandidates();
       return cand;
     }

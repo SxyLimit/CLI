@@ -34,14 +34,14 @@ HOME_PATH=settings
 
 ## 配置目录
 
-- 默认情况下，所有配置文件存放在 `./settings/` 目录中，包括 `mycli_settings.json`、`mycli_tools.conf` 与 `mycli_llm_history.json`。
+- 默认情况下，所有配置文件存放在 `./settings/` 目录中，包括 `mycli_settings.conf`、`mycli_tools.conf` 与 `mycli_llm_history.json`。
+- `mycli_settings.conf` 采用逐行 `key=value` 的纯文本格式，方便手动编辑；不要误认为是 JSON 文件。
 - 运行时可通过 `setting set home.path <目录>` 修改配置目录，CLI 会自动迁移已有文件并更新监听路径。
 - 也可以在 `.env` 或系统环境变量中设置 `HOME_PATH=<目录>`，用于在启动前指定配置目录位置。
 
 ## 设置命令
 
-- `setting list [前缀…]`：列出所有配置项，或仅列出以指定分段（空格分隔）为前缀的键值对。
-- `setting get <分段…>`：获取完整键对应的值；若指定的是某个分支前缀，则会列出该子树下的所有键和值。
+- `setting get [分段…]`：不带参数时列出所有配置项；指定某个分支前缀时，会输出该子树下的所有键和值，传入完整键则展示对应的单项。
 - `setting set <分段…> <值>`：修改某个完整键的值，支持根据键类型提供布尔、枚举等自动补全提示。
 
 每一级分段都可以使用补全按键查看可用的下一层节点，确保在输入 `set` 时始终能够补全到最终叶子节点后再录入新值。
@@ -135,7 +135,7 @@ positional=<url>
 - `tools/*.hpp`：每个内置命令对应一个独立头文件（例如 `tools/ls.hpp`、`tools/cat.hpp`、`tools/mv.hpp`），包含 UI 定义、执行逻辑以及 `tool::make_*_tool()` 工厂函数。
 - `tools/pytool.py`：示例 Python 工具脚本。
 - `tools/image_to_art.py`：将图片转为 `.climg` 结构化文本的脚本，可配合动态工具 `image-art` 使用。
-- `settings/`：默认配置目录，包含 `mycli_settings.json`、`mycli_tools.conf`、`mycli_llm_history.json`。
+- `settings/`：默认配置目录，包含 `mycli_settings.conf`、`mycli_tools.conf`、`mycli_llm_history.json`。
 
 ## 开发提示
 

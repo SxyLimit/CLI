@@ -13,10 +13,10 @@ This project now uses the redesigned tool architecture. Please follow these rule
 - When you need custom completions, attach a `ToolCompletionProvider` in the returned `ToolDefinition` (see the `setting` tool for an example).
 
 ### `setting` command expectations
-- Keep the CLI grammar as `setting <list|get|set> …`. The first argument must always be the action keyword.
-- `setting get` should accept partial prefixes and print every leaf under that branch while still honouring exact matches.
+- Keep the CLI grammar as `setting <get|set> …`. The first argument must always be the action keyword.
+- `setting get` without extra segments must dump every known key/value pair. With partial prefixes it should list the entire subtree, while exact matches still show the resolved value.
 - `setting set` must resolve the key before reading the new value; rely on the known key catalogue to decide where the path ends and surface completion hints for both segments and allowed values.
-- Autocomplete should always suggest the next path segment immediately after `setting` is typed (no placeholder token) and continue offering hierarchical segments until the command reaches a full key.
+- Autocomplete should continue offering hierarchical segments once a token is completed (pressing <Tab> should append the space and expose children), and must never drop suggestions after typing a valid prefix.
 
 ### Extending the tool set (workflow)
 1. Create a new header under `tools/` named after the command (for example `tools/mkdir.hpp`).
@@ -54,6 +54,10 @@ This project now uses the redesigned tool architecture. Please follow these rule
 - `optionPaths` entries accept typed descriptors: `--output:file:.climg|.png` will mark the option as a file path and limit completions to the listed suffixes.
 - `positionalPaths` uses `1:file:.climg` style descriptors (1-based index). When this metadata is present, the runtime automatically toggles autocomplete, error messages, and help output to reflect the requirement.
 - Dynamic tools are executed through the unified tool interface, so they also benefit from `invoke_registered_tool` and silent execution capture.
+
+## Settings storage
+- Persisted user preferences live in `mycli_settings.conf` and follow a simple `key=value` line format. Avoid describing or serialising them as JSON.
+- When you extend the settings surface, update both the CLI behaviour (including `setting get` with empty prefixes) and the README examples in the same change.
 
 ## Command helpers
 - The built-in `run` command simply shells out to whatever command follows (`run ls -al`), escaping each argument safely via `shellEscape`. Use this tool for delegating to external commands without adding a bespoke wrapper.
