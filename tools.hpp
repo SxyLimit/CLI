@@ -388,6 +388,7 @@ struct Setting {
     set_tool_summary_locale(spec, "zh", "管理 CLI 设置");
     set_tool_help_locale(spec, "en", "setting <segments...> [list|get|set <value>]");
     set_tool_help_locale(spec, "zh", "setting <分段...> [list|get|set <值>]");
+    spec.positional.push_back(positional("<toolname>"));
     return spec;
   }
 
@@ -468,6 +469,9 @@ struct Setting {
     if(tokens.empty()) return cand;
     SplitWord sw = splitLastWord(buffer);
     bool endsWithSpace = !buffer.empty() && std::isspace(static_cast<unsigned char>(buffer.back()));
+    if(tokens.size() == 1 && !endsWithSpace){
+      return cand;
+    }
     std::string current = sw.word;
     std::vector<std::string> rest(tokens.begin() + 1, tokens.end());
     std::string action;
@@ -491,6 +495,7 @@ struct Setting {
       std::string item = sw.before + label;
       if(appendSpace) item += ' ';
       MatchResult match = compute_match(label, current);
+      if(!match.matched) return;
       if(!endsWithSpace && match.exact && label == current) return;
       cand.items.push_back(item);
       cand.labels.push_back(label);
