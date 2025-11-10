@@ -500,22 +500,32 @@ struct Setting {
     const std::vector<std::string> actionsVec = {"get", "set"};
     const std::set<std::string> actions(actionsVec.begin(), actionsVec.end());
 
-    auto pushActionCandidate = [&](const std::string& label, const std::string& pattern){
-      MatchResult match = compute_match(label, pattern);
-      std::string base = buffer;
-      if(!endsWithSpace) base += ' ';
-      std::string item = base + label + ' ';
-      cand.items.push_back(item);
-      cand.labels.push_back(label);
-      cand.matchDetails.push_back(match);
-      cand.matchPositions.push_back(match.positions);
-      cand.annotations.push_back("");
-      cand.exactMatches.push_back(match.exact);
-    };
-
     if(tokens.size() == 1){
+      const std::string typedCommand = tokens.front();
+      const bool typingCommandWord = !endsWithSpace && sw.word == typedCommand;
       for(const auto& action : actionsVec){
-        pushActionCandidate(action, "");
+        std::string base = buffer;
+        if(!endsWithSpace) base.push_back(' ');
+        std::string item = base + action + ' ';
+        cand.items.push_back(item);
+
+        std::string displayLabel;
+        MatchResult match{};
+        if(typingCommandWord){
+          displayLabel = typedCommand + ' ' + action;
+          match = compute_match(typedCommand, typedCommand);
+          match.exact = false;
+          match.isExactEqual = false;
+        }else{
+          displayLabel = action;
+          match = compute_match(action, "");
+        }
+
+        cand.labels.push_back(displayLabel);
+        cand.matchPositions.push_back(match.positions);
+        cand.matchDetails.push_back(match);
+        cand.annotations.push_back("");
+        cand.exactMatches.push_back(false);
       }
       return cand;
     }
@@ -600,11 +610,11 @@ struct Setting {
 
     bool editingValue = false;
     std::string keyForSuggestions;
-    if(fullSegments.size() > best.size()){
+    if(!best.empty() && fullSegments.size() > best.size()){
       editingValue = true;
       keyForSuggestions = join_setting_segments(best);
       pattern = sw.word;
-    }else if(endsWithSpace && !best.empty() && best.size() == fullSegments.size()){
+    }else if(!best.empty() && endsWithSpace && best.size() == fullSegments.size()){
       editingValue = true;
       keyForSuggestions = join_setting_segments(best);
       pattern.clear();
