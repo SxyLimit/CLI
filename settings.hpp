@@ -6,6 +6,7 @@
 #include <optional>
 #include <cstring>
 #include <algorithm>
+#include <stdexcept>
 
 inline AppSettings g_settings{};
 
@@ -42,11 +43,13 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"message.folder", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
     {"prompt.name", {SettingValueKind::String, {}}},
     {"prompt.theme", {SettingValueKind::Enum, {"blue", "blue-purple", "red-yellow", "purple-orange"}}},
-    {"prompt.theme_art_path", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
-    {"prompt.theme_art_path.blue", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
-    {"prompt.theme_art_path.blue-purple", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
-    {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
-    {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
+    {"prompt.theme_art_path.blue", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, true}},
+    {"prompt.theme_art_path.blue-purple", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, true}},
+    {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, true}},
+    {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, true}},
+    {"prompt.input_ellipsis.enabled", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"prompt.input_ellipsis.left_width", {SettingValueKind::String, {}}},
+    {"prompt.input_ellipsis.right_width", {SettingValueKind::String, {}}},
     {"home.path", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
   };
   return infos;
@@ -96,6 +99,29 @@ bool parseSubsequenceStrategy(const std::string& v, SubsequenceStrategy& out){
   return false;
 }
 
+bool value_matches_allowed_extensions(const SettingKeyInfo* info, const std::string& value){
+  if(!info) return true;
+  if(!info->isPath) return true;
+  if(info->allowedExtensions.empty()) return true;
+  if(value.empty()) return true;
+  std::string loweredValue = value;
+  std::transform(loweredValue.begin(), loweredValue.end(), loweredValue.begin(), [](unsigned char ch){
+    return static_cast<char>(std::tolower(ch));
+  });
+  for(auto ext : info->allowedExtensions){
+    if(ext.empty()) continue;
+    if(ext.front() != '.') ext.insert(ext.begin(), '.');
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch){
+      return static_cast<char>(std::tolower(ch));
+    });
+    if(loweredValue.size() < ext.size()) continue;
+    if(loweredValue.compare(loweredValue.size() - ext.size(), ext.size(), ext) == 0){
+      return true;
+    }
+  }
+  return false;
+}
+
 }
 
 inline void settings_register_language(const std::string& lang){
@@ -114,6 +140,17 @@ inline const SettingKeyInfo* settings_key_info(const std::string& key){
   const auto& map = keyInfoMap();
   auto it = map.find(key);
   if(it!=map.end()) return &it->second;
+  if(key=="prompt.theme_art_path"){
+    static const SettingKeyInfo aliasInfo{
+      SettingValueKind::String,
+      {},
+      true,
+      PathKind::File,
+      {".climg"},
+      true
+    };
+    return &aliasInfo;
+  }
   if(startsWith(key, "prompt.theme_art_path.")){
     static const SettingKeyInfo dynamicThemePath{
       SettingValueKind::String,
@@ -121,7 +158,7 @@ inline const SettingKeyInfo* settings_key_info(const std::string& key){
       true,
       PathKind::File,
       {".climg"},
-      false
+      true
     };
     return &dynamicThemePath;
   }
@@ -143,6 +180,8 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
         out.assign(langs.begin(), langs.end());
       }else if(key=="prompt.name"){
         // no predefined suggestions
+      }else if(key=="prompt.input_ellipsis.left_width" || key=="prompt.input_ellipsis.right_width"){
+        out = {"20", "30", "50", "60"};
       }
       break;
   }
@@ -202,12 +241,30 @@ inline void load_settings(const std::string& path){
         if(t=="blue" || t=="blue-purple" || t=="red-yellow" || t=="purple-orange"){
           g_settings.promptTheme = t;
         }
+      }else if(key=="prompt.input_ellipsis.enabled"){
+        bool b; if(parseBool(val,b)) g_settings.promptInputEllipsisEnabled = b;
+      }else if(key=="prompt.input_ellipsis.left_width"){
+        try{
+          int v = std::stoi(val);
+          if(v >= 0) g_settings.promptInputEllipsisLeftWidth = v;
+        }catch(...){
+        }
+      }else if(key=="prompt.input_ellipsis.right_width"){
+        try{
+          int v = std::stoi(val);
+          if(v >= 0) g_settings.promptInputEllipsisRightWidth = v;
+        }catch(...){
+        }
       }else if(key=="prompt.theme_art_path"){
-        g_settings.promptThemeArtPaths["blue-purple"] = val;
+        if(value_matches_allowed_extensions(settings_key_info(key), val)){
+          g_settings.promptThemeArtPaths["blue-purple"] = val;
+        }
       }else if(startsWith(key, "prompt.theme_art_path.")){
         std::string themeKey = key.substr(std::strlen("prompt.theme_art_path."));
         std::transform(themeKey.begin(), themeKey.end(), themeKey.begin(), ::tolower);
-        g_settings.promptThemeArtPaths[themeKey] = val;
+        if(value_matches_allowed_extensions(settings_key_info(key), val)){
+          g_settings.promptThemeArtPaths[themeKey] = val;
+        }
       }else if(key=="home.path"){
         desiredHome = val;
       }
@@ -237,12 +294,14 @@ inline void save_settings(const std::string& path){
   out << "message.folder=" << g_settings.messageWatchFolder << "\n";
   out << "prompt.name=" << g_settings.promptName << "\n";
   out << "prompt.theme=" << g_settings.promptTheme << "\n";
+  out << "prompt.input_ellipsis.enabled=" << (g_settings.promptInputEllipsisEnabled ? "true" : "false") << "\n";
+  out << "prompt.input_ellipsis.left_width=" << g_settings.promptInputEllipsisLeftWidth << "\n";
+  out << "prompt.input_ellipsis.right_width=" << g_settings.promptInputEllipsisRightWidth << "\n";
   auto pathForTheme = [&](const std::string& theme) -> std::string {
     auto it = g_settings.promptThemeArtPaths.find(theme);
     if(it == g_settings.promptThemeArtPaths.end()) return "";
     return it->second;
   };
-  out << "prompt.theme_art_path=" << pathForTheme("blue-purple") << "\n";
   for(const std::string& themeKey : {std::string("blue"), std::string("blue-purple"), std::string("red-yellow"), std::string("purple-orange")}){
     out << "prompt.theme_art_path." << themeKey << "=" << pathForTheme(themeKey) << "\n";
   }
@@ -279,6 +338,18 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="prompt.theme"){
     value = g_settings.promptTheme; return true;
+  }
+  if(key=="prompt.input_ellipsis.enabled"){
+    value = g_settings.promptInputEllipsisEnabled ? "true" : "false";
+    return true;
+  }
+  if(key=="prompt.input_ellipsis.left_width"){
+    value = std::to_string(g_settings.promptInputEllipsisLeftWidth);
+    return true;
+  }
+  if(key=="prompt.input_ellipsis.right_width"){
+    value = std::to_string(g_settings.promptInputEllipsisRightWidth);
+    return true;
   }
   if(key=="prompt.theme_art_path"){
     auto it = g_settings.promptThemeArtPaths.find("blue-purple");
@@ -372,13 +443,51 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     g_settings.promptTheme = t;
     return true;
   }
+  if(key=="prompt.input_ellipsis.enabled"){
+    bool b;
+    if(!parseBool(value, b)){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.promptInputEllipsisEnabled = b;
+    return true;
+  }
+  if(key=="prompt.input_ellipsis.left_width" || key=="prompt.input_ellipsis.right_width"){
+    int v = 0;
+    try{
+      size_t idx = 0;
+      v = std::stoi(value, &idx);
+      if(idx != value.size()) throw std::invalid_argument("extra");
+    }catch(...){
+      error = "invalid_value";
+      return false;
+    }
+    if(v < 0){
+      error = "invalid_value";
+      return false;
+    }
+    if(key=="prompt.input_ellipsis.left_width"){
+      g_settings.promptInputEllipsisLeftWidth = v;
+    }else{
+      g_settings.promptInputEllipsisRightWidth = v;
+    }
+    return true;
+  }
   if(key=="prompt.theme_art_path"){
+    if(!value_matches_allowed_extensions(settings_key_info(key), value)){
+      error = "invalid_value";
+      return false;
+    }
     g_settings.promptThemeArtPaths["blue-purple"] = value;
     return true;
   }
   if(startsWith(key, "prompt.theme_art_path.")){
     std::string themeKey = key.substr(std::strlen("prompt.theme_art_path."));
     std::transform(themeKey.begin(), themeKey.end(), themeKey.begin(), ::tolower);
+    if(!value_matches_allowed_extensions(settings_key_info(key), value)){
+      error = "invalid_value";
+      return false;
+    }
     g_settings.promptThemeArtPaths[themeKey] = value;
     return true;
   }

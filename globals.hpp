@@ -230,6 +230,9 @@ struct AppSettings {
   std::string promptName = "mycli";
   std::string promptTheme = "blue";
   std::map<std::string, std::string> promptThemeArtPaths;
+  bool promptInputEllipsisEnabled = false;
+  int  promptInputEllipsisLeftWidth = 30;
+  int  promptInputEllipsisRightWidth = 50;
   std::string configHome;
 };
 
