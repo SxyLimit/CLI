@@ -572,16 +572,33 @@ struct Setting {
       }
     }
 
-    auto addSegmentCandidates = [&](){
-      auto segments = next_setting_segments(prefix);
-      for(const auto& seg : segments){
-        addCandidate(seg, true, pattern);
+    auto addSegmentCandidates = [&](const std::vector<std::string>& segPrefix,
+                                    const std::string& segPattern,
+                                    bool includeChildrenOnExact){
+      auto segments = next_setting_segments(segPrefix);
+      bool showChildren = false;
+      if(includeChildrenOnExact && !segPattern.empty() && sw.word == segPattern){
+        showChildren = segments.find(segPattern) != segments.end();
       }
-      sortCandidatesByMatch(pattern, cand);
+
+      for(const auto& seg : segments){
+        addCandidate(seg, true, segPattern);
+      }
+
+      if(showChildren){
+        std::vector<std::string> childPrefix = segPrefix;
+        childPrefix.push_back(segPattern);
+        auto children = next_setting_segments(childPrefix);
+        for(const auto& child : children){
+          addCandidate(child, true, std::string());
+        }
+      }
+
+      sortCandidatesByMatch(segPattern, cand);
     };
 
     if(actionToken == "get"){
-      addSegmentCandidates();
+      addSegmentCandidates(prefix, pattern, true);
       return cand;
     }
 
@@ -626,7 +643,7 @@ struct Setting {
       return cand;
     }
 
-    addSegmentCandidates();
+    addSegmentCandidates(prefix, pattern, true);
     return cand;
   }
 
