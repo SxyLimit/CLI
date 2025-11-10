@@ -31,6 +31,7 @@
 #include <type_traits>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 #include "globals.hpp"
 #include "tools.hpp"
@@ -2173,6 +2174,40 @@ static void prioritizeExactMatches(Candidates& cand){
   reorderVec(cand.matchDetails);
 }
 
+static Candidates rematchCandidatesForWord(Candidates&& cand, const std::string& word){
+  if(word.empty()) return std::move(cand);
+
+  Candidates filtered;
+  size_t count = cand.labels.size();
+  filtered.items.reserve(count);
+  filtered.labels.reserve(count);
+  filtered.matchPositions.reserve(count);
+  filtered.annotations.reserve(count);
+  filtered.exactMatches.reserve(count);
+  filtered.matchDetails.reserve(count);
+
+  auto takeString = [](std::vector<std::string>& src, size_t idx)->std::string{
+    if(idx < src.size()) return std::move(src[idx]);
+    return std::string();
+  };
+
+  for(size_t i = 0; i < count; ++i){
+    const std::string& label = cand.labels[i];
+    MatchResult match = compute_match(label, word);
+    if(!match.matched) continue;
+
+    filtered.items.push_back(takeString(cand.items, i));
+    filtered.labels.push_back(std::move(cand.labels[i]));
+    filtered.matchPositions.push_back(match.positions);
+    filtered.annotations.push_back(takeString(cand.annotations, i));
+    filtered.exactMatches.push_back(match.exact);
+    filtered.matchDetails.push_back(match);
+  }
+
+  sortCandidatesByMatch(word, filtered);
+  return filtered;
+}
+
 static Candidates computeCandidates(const std::string& buf, size_t cursor){
   std::string prefix = buf.substr(0, std::min(cursor, buf.size()));
   auto toks=splitTokens(prefix);
@@ -2706,10 +2741,17 @@ int main(){
     CursorWordInfo wordInfo = analyzeWordAtCursor(buf, cursorIndex);
 
     cand = computeCandidates(buf, cursorIndex);
+    std::string fullWord = wordInfo.wordBeforeCursor + wordInfo.wordAfterCursor;
+    cand = rematchCandidatesForWord(std::move(cand), fullWord);
     prioritizeExactMatches(cand);
     total = static_cast<int>(cand.labels.size());
     haveCand = total > 0;
-    if(haveCand && sel >= total) sel = 0;
+    if(!haveCand){
+      sel = 0;
+    }else{
+      if(sel < 0) sel = ((sel % total) + total) % total;
+      if(sel >= total) sel = sel % total;
+    }
     bool showInlineSuggestion = haveCand && sel >= 0 && sel < total;
     contextGhost = (haveCand && showInlineSuggestion) ? std::string() : contextGhostFor(prefix);
     auto pathError = detectPathErrorMessage(prefix, cand);
