@@ -1579,6 +1579,7 @@ static Candidates firstWordCandidates(const std::string& buf){
   for(auto&s:names){
     MatchResult match = compute_match(s, sw.word);
     if(!match.matched) continue;
+    if(match.exact && s == sw.word) continue;
     out.items.push_back(sw.before + s);
     out.labels.push_back(s);
     out.matchPositions.push_back(match.positions);

@@ -490,9 +490,10 @@ struct Setting {
     auto addCandidate = [&](const std::string& label, bool appendSpace){
       std::string item = sw.before + label;
       if(appendSpace) item += ' ';
+      MatchResult match = compute_match(label, current);
+      if(!endsWithSpace && match.exact && label == current) return;
       cand.items.push_back(item);
       cand.labels.push_back(label);
-      MatchResult match = compute_match(label, current);
       cand.matchDetails.push_back(match);
       cand.matchPositions.push_back(match.positions);
       cand.annotations.push_back("");
@@ -504,8 +505,10 @@ struct Setting {
       for(const auto& seg : segments){
         addCandidate(seg, true);
       }
-      for(const auto& act : actions){
-        addCandidate(act, true);
+      if(!prefix.empty()){
+        for(const auto& act : actions){
+          addCandidate(act, true);
+        }
       }
     }else if(!endsWithSpace && actionIndex == rest.size() - 1){
       for(const auto& act : actions){
