@@ -6,6 +6,7 @@
 #include <optional>
 #include <cstring>
 #include <algorithm>
+#include <stdexcept>
 
 inline AppSettings g_settings{};
 
@@ -47,6 +48,8 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"prompt.theme_art_path.blue-purple", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
     {"prompt.theme_art_path.red-yellow", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
     {"prompt.theme_art_path.purple-orange", {SettingValueKind::String, {}, true, PathKind::File, {".climg"}, false}},
+    {"prompt.input_ellipsis.enabled", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"prompt.input_ellipsis.max_width", {SettingValueKind::String, {}}},
     {"home.path", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
   };
   return infos;
@@ -143,6 +146,8 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
         out.assign(langs.begin(), langs.end());
       }else if(key=="prompt.name"){
         // no predefined suggestions
+      }else if(key=="prompt.input_ellipsis.max_width"){
+        out = {"40", "60", "80"};
       }
       break;
   }
@@ -202,6 +207,14 @@ inline void load_settings(const std::string& path){
         if(t=="blue" || t=="blue-purple" || t=="red-yellow" || t=="purple-orange"){
           g_settings.promptTheme = t;
         }
+      }else if(key=="prompt.input_ellipsis.enabled"){
+        bool b; if(parseBool(val,b)) g_settings.promptInputEllipsisEnabled = b;
+      }else if(key=="prompt.input_ellipsis.max_width"){
+        try{
+          int v = std::stoi(val);
+          if(v >= 3) g_settings.promptInputEllipsisMaxWidth = v;
+        }catch(...){
+        }
       }else if(key=="prompt.theme_art_path"){
         g_settings.promptThemeArtPaths["blue-purple"] = val;
       }else if(startsWith(key, "prompt.theme_art_path.")){
@@ -237,6 +250,8 @@ inline void save_settings(const std::string& path){
   out << "message.folder=" << g_settings.messageWatchFolder << "\n";
   out << "prompt.name=" << g_settings.promptName << "\n";
   out << "prompt.theme=" << g_settings.promptTheme << "\n";
+  out << "prompt.input_ellipsis.enabled=" << (g_settings.promptInputEllipsisEnabled ? "true" : "false") << "\n";
+  out << "prompt.input_ellipsis.max_width=" << g_settings.promptInputEllipsisMaxWidth << "\n";
   auto pathForTheme = [&](const std::string& theme) -> std::string {
     auto it = g_settings.promptThemeArtPaths.find(theme);
     if(it == g_settings.promptThemeArtPaths.end()) return "";
@@ -279,6 +294,14 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="prompt.theme"){
     value = g_settings.promptTheme; return true;
+  }
+  if(key=="prompt.input_ellipsis.enabled"){
+    value = g_settings.promptInputEllipsisEnabled ? "true" : "false";
+    return true;
+  }
+  if(key=="prompt.input_ellipsis.max_width"){
+    value = std::to_string(g_settings.promptInputEllipsisMaxWidth);
+    return true;
   }
   if(key=="prompt.theme_art_path"){
     auto it = g_settings.promptThemeArtPaths.find("blue-purple");
@@ -370,6 +393,32 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
       return false;
     }
     g_settings.promptTheme = t;
+    return true;
+  }
+  if(key=="prompt.input_ellipsis.enabled"){
+    bool b;
+    if(!parseBool(value, b)){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.promptInputEllipsisEnabled = b;
+    return true;
+  }
+  if(key=="prompt.input_ellipsis.max_width"){
+    int v = 0;
+    try{
+      size_t idx = 0;
+      v = std::stoi(value, &idx);
+      if(idx != value.size()) throw std::invalid_argument("extra");
+    }catch(...){
+      error = "invalid_value";
+      return false;
+    }
+    if(v < 3){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.promptInputEllipsisMaxWidth = v;
     return true;
   }
   if(key=="prompt.theme_art_path"){

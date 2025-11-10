@@ -2030,11 +2030,19 @@ static void renderPromptLabel(){
 static void renderInputWithGhost(const std::string& status, int status_len,
                                  const std::string& buf, const std::string& ghost){
   (void)status_len;
+  bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled && g_settings.promptInputEllipsisMaxWidth >= 3;
+  int combinedWidth = displayWidth(buf) + displayWidth(ghost);
+  bool shouldEllipsize = ellipsisEnabled && combinedWidth > g_settings.promptInputEllipsisMaxWidth;
+
   std::cout << ansi::CLR
             << ansi::WHITE << status << ansi::RESET;
   renderPromptLabel();
-  std::cout << ansi::WHITE << buf << ansi::RESET;
-  if(!ghost.empty()) std::cout << ansi::GRAY << ghost << ansi::RESET;
+  if(shouldEllipsize){
+    std::cout << ansi::WHITE << "..." << ansi::RESET;
+  }else{
+    std::cout << ansi::WHITE << buf << ansi::RESET;
+    if(!ghost.empty()) std::cout << ansi::GRAY << ghost << ansi::RESET;
+  }
   std::cout.flush();
 }
 static void renderBelowThree(const std::string& status, int status_len,
@@ -2245,34 +2253,56 @@ int main(){
     contextGhost = (haveCand && showInlineSuggestion) ? std::string() : contextGhostFor(buf);
     auto pathError = detectPathErrorMessage(buf, cand);
 
+    std::string annotation = (sel < cand.annotations.size()) ? cand.annotations[sel] : "";
+    int annotationWidth = annotation.empty() ? 0 : 1 + displayWidth(annotation);
+    int contentWidth = displayWidth(sw.before);
+    if(pathError){
+      contentWidth += displayWidth(sw.word) + 3 + displayWidth(*pathError) + displayWidth(contextGhost);
+    }else if(showInlineSuggestion){
+      contentWidth += displayWidth(cand.labels[sel]) + annotationWidth;
+    }else{
+      contentWidth += displayWidth(sw.word) + displayWidth(contextGhost);
+    }
+
+    bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled && g_settings.promptInputEllipsisMaxWidth >= 3;
+    bool useEllipsis = ellipsisEnabled && contentWidth > g_settings.promptInputEllipsisMaxWidth;
+
     std::cout << ansi::CLR
               << ansi::WHITE << status << ansi::RESET;
     renderPromptLabel();
-    std::cout << ansi::WHITE << sw.before << ansi::RESET;
-    if(pathError){
-      std::cout << ansi::RED << sw.word << ansi::RESET
-                << "  " << ansi::YELLOW << "+" << *pathError << ansi::RESET;
-    }else if(showInlineSuggestion){
-      const std::string& label = cand.labels[sel];
-      const std::vector<int>& matches = cand.matchPositions[sel];
-      std::string rendered = renderHighlightedLabel(label, matches);
-      std::string annotation = (sel < cand.annotations.size()) ? cand.annotations[sel] : "";
-      if(!annotation.empty()){
-        rendered += " ";
-        rendered += ansi::GREEN;
-        rendered += annotation;
-        rendered += ansi::RESET;
-      }
-      std::cout << rendered;
+    if(useEllipsis){
+      std::cout << ansi::WHITE << "..." << ansi::RESET;
     }else{
-      std::cout << ansi::WHITE << sw.word << ansi::RESET;
+      std::cout << ansi::WHITE << sw.before << ansi::RESET;
+      if(pathError){
+        std::cout << ansi::RED << sw.word << ansi::RESET
+                  << "  " << ansi::YELLOW << "+" << *pathError << ansi::RESET;
+      }else if(showInlineSuggestion){
+        const std::string& label = cand.labels[sel];
+        const std::vector<int>& matches = cand.matchPositions[sel];
+        std::string rendered = renderHighlightedLabel(label, matches);
+        if(!annotation.empty()){
+          rendered += " ";
+          rendered += ansi::GREEN;
+          rendered += annotation;
+          rendered += ansi::RESET;
+        }
+        std::cout << rendered;
+      }else{
+        std::cout << ansi::WHITE << sw.word << ansi::RESET;
+      }
+      if(!contextGhost.empty()) std::cout << ansi::GRAY << contextGhost << ansi::RESET;
     }
-    if(!contextGhost.empty()) std::cout << ansi::GRAY << contextGhost << ansi::RESET;
     std::cout.flush();
 
-    int baseIndent = status_len + promptDisplayWidth() + displayWidth(sw.before);
+    int baseIndent = status_len + promptDisplayWidth();
+    if(!useEllipsis){
+      baseIndent += displayWidth(sw.before);
+    }
     int cursorCol = baseIndent;
-    if(pathError){
+    if(useEllipsis){
+      cursorCol += displayWidth("...");
+    }else if(pathError){
       cursorCol += displayWidth(sw.word);
     }else if(showInlineSuggestion){
       int offset = highlightCursorOffset(cand.labels[sel], cand.matchPositions[sel]);
@@ -2285,7 +2315,7 @@ int main(){
     }
     cursorCol += 1;
 
-    if(haveCand){
+    if(haveCand && !useEllipsis){
       renderBelowThree(status, status_len, cursorCol, buf, cand, sel, lastShown);
     }else{
       for(int i=0;i<lastShown;i++){ std::cout<<"\n"<<"\x1b[2K"; }
