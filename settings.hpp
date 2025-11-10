@@ -100,6 +100,29 @@ bool parseSubsequenceStrategy(const std::string& v, SubsequenceStrategy& out){
   return false;
 }
 
+bool value_matches_allowed_extensions(const SettingKeyInfo* info, const std::string& value){
+  if(!info) return true;
+  if(!info->isPath) return true;
+  if(info->allowedExtensions.empty()) return true;
+  if(value.empty()) return true;
+  std::string loweredValue = value;
+  std::transform(loweredValue.begin(), loweredValue.end(), loweredValue.begin(), [](unsigned char ch){
+    return static_cast<char>(std::tolower(ch));
+  });
+  for(auto ext : info->allowedExtensions){
+    if(ext.empty()) continue;
+    if(ext.front() != '.') ext.insert(ext.begin(), '.');
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch){
+      return static_cast<char>(std::tolower(ch));
+    });
+    if(loweredValue.size() < ext.size()) continue;
+    if(loweredValue.compare(loweredValue.size() - ext.size(), ext.size(), ext) == 0){
+      return true;
+    }
+  }
+  return false;
+}
+
 }
 
 inline void settings_register_language(const std::string& lang){
@@ -223,11 +246,15 @@ inline void load_settings(const std::string& path){
         }catch(...){
         }
       }else if(key=="prompt.theme_art_path"){
-        g_settings.promptThemeArtPaths["blue-purple"] = val;
+        if(value_matches_allowed_extensions(settings_key_info(key), val)){
+          g_settings.promptThemeArtPaths["blue-purple"] = val;
+        }
       }else if(startsWith(key, "prompt.theme_art_path.")){
         std::string themeKey = key.substr(std::strlen("prompt.theme_art_path."));
         std::transform(themeKey.begin(), themeKey.end(), themeKey.begin(), ::tolower);
-        g_settings.promptThemeArtPaths[themeKey] = val;
+        if(value_matches_allowed_extensions(settings_key_info(key), val)){
+          g_settings.promptThemeArtPaths[themeKey] = val;
+        }
       }else if(key=="home.path"){
         desiredHome = val;
       }
@@ -438,12 +465,20 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     return true;
   }
   if(key=="prompt.theme_art_path"){
+    if(!value_matches_allowed_extensions(settings_key_info(key), value)){
+      error = "invalid_value";
+      return false;
+    }
     g_settings.promptThemeArtPaths["blue-purple"] = value;
     return true;
   }
   if(startsWith(key, "prompt.theme_art_path.")){
     std::string themeKey = key.substr(std::strlen("prompt.theme_art_path."));
     std::transform(themeKey.begin(), themeKey.end(), themeKey.begin(), ::tolower);
+    if(!value_matches_allowed_extensions(settings_key_info(key), value)){
+      error = "invalid_value";
+      return false;
+    }
     g_settings.promptThemeArtPaths[themeKey] = value;
     return true;
   }

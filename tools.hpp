@@ -560,26 +560,74 @@ struct Setting {
     }
 
     std::vector<std::string> typed(rest.begin() + 1, rest.end());
-    std::vector<std::string> prefix;
     std::string pattern = sw.word;
     if(!typed.empty()){
-      prefix = typed;
       if(!endsWithSpace){
-        pattern = prefix.back();
-        prefix.pop_back();
+        pattern = typed.back();
       }else{
         pattern.clear();
       }
     }
 
-    auto addSegmentCandidates = [&](const std::vector<std::string>& segPrefix,
-                                    const std::string& segPattern,
-                                    bool expectingNewSegment){
-      auto segments = next_setting_segments(segPrefix);
+    struct SegmentState {
+      std::vector<std::string> prefixSegments;
+      std::string pattern;
+      std::string textPrefix;
+      bool useBuffer = false;
+    };
+
+    auto expandTokenSegments = [](const std::vector<std::string>& tokens){
+      std::vector<std::string> segs;
+      for(const auto& token : tokens){
+        auto parts = split_setting_key(token);
+        segs.insert(segs.end(), parts.begin(), parts.end());
+      }
+      return segs;
+    };
+
+    auto buildSegmentState = [&](const std::vector<std::string>& typedTokens,
+                                 bool endsWithSpaceFlag) -> SegmentState {
+      SegmentState state;
+      state.useBuffer = endsWithSpaceFlag;
+      std::vector<std::string> prefixTokens = typedTokens;
+      std::string patternToken;
+      if(!prefixTokens.empty() && !endsWithSpaceFlag){
+        patternToken = prefixTokens.back();
+        prefixTokens.pop_back();
+      }
+      state.prefixSegments = expandTokenSegments(prefixTokens);
+      if(patternToken.empty()){
+        state.pattern.clear();
+        state.textPrefix.clear();
+        return state;
+      }
+      size_t lastDot = patternToken.find_last_of('.');
+      if(lastDot == std::string::npos){
+        state.pattern = patternToken;
+        state.textPrefix.clear();
+        return state;
+      }
+      std::string before = patternToken.substr(0, lastDot);
+      if(!before.empty()){
+        auto parts = split_setting_key(before);
+        state.prefixSegments.insert(state.prefixSegments.end(), parts.begin(), parts.end());
+      }
+      state.textPrefix = patternToken.substr(0, lastDot + 1);
+      std::string after = patternToken.substr(lastDot + 1);
+      if(after.empty()){
+        state.pattern.clear();
+      }else{
+        state.pattern = after;
+      }
+      return state;
+    };
+
+    auto addSegmentCandidates = [&](const SegmentState& state){
+      auto segments = next_setting_segments(state.prefixSegments);
       for(const auto& seg : segments){
-        MatchResult match = compute_match(seg, segPattern);
+        MatchResult match = compute_match(seg, state.pattern);
         if(!match.matched) continue;
-        std::string item = expectingNewSegment ? (buffer + seg) : (sw.before + seg);
+        std::string item = state.useBuffer ? (buffer + seg) : (sw.before + state.textPrefix + seg);
         item.push_back(' ');
         cand.items.push_back(item);
         cand.labels.push_back(seg);
@@ -588,13 +636,14 @@ struct Setting {
         cand.annotations.push_back("");
         cand.exactMatches.push_back(match.exact);
       }
-      if(!segPattern.empty()){
-        sortCandidatesByMatch(segPattern, cand);
+      if(!state.pattern.empty()){
+        sortCandidatesByMatch(state.pattern, cand);
       }
     };
 
     if(actionToken == "get"){
-      addSegmentCandidates(prefix, pattern, endsWithSpace);
+      SegmentState segState = buildSegmentState(typed, endsWithSpace);
+      addSegmentCandidates(segState);
       return cand;
     }
 
@@ -673,7 +722,16 @@ struct Setting {
       return cand;
     }
 
-    addSegmentCandidates(prefix, pattern, endsWithSpace);
+    SegmentState segState = buildSegmentState(typed, endsWithSpace);
+    if(!endsWithSpace && !sw.word.empty() && !segState.useBuffer){
+      // When the current token contains dot-separated prefixes (e.g. prompt.theme_),
+      // ensure we reuse the literal prefix before the candidate.
+      size_t lastDot = sw.word.find_last_of('.');
+      if(lastDot != std::string::npos){
+        segState.textPrefix = sw.word.substr(0, lastDot + 1);
+      }
+    }
+    addSegmentCandidates(segState);
     return cand;
   }
 
