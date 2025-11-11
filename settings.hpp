@@ -51,6 +51,7 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"prompt.input_ellipsis.left_width", {SettingValueKind::String, {}}},
     {"prompt.input_ellipsis.right_width", {SettingValueKind::String, {}}},
     {"home.path", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
+    {"history.recent_limit", {SettingValueKind::String, {}}},
   };
   return infos;
 }
@@ -182,6 +183,8 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
         // no predefined suggestions
       }else if(key=="prompt.input_ellipsis.left_width" || key=="prompt.input_ellipsis.right_width"){
         out = {"20", "30", "50", "60"};
+      }else if(key=="history.recent_limit"){
+        out = {"5", "10", "20", "50"};
       }
       break;
   }
@@ -267,6 +270,14 @@ inline void load_settings(const std::string& path){
         }
       }else if(key=="home.path"){
         desiredHome = val;
+      }else if(key=="history.recent_limit"){
+        try{
+          int v = std::stoi(val);
+          if(v < 0) v = 0;
+          g_settings.historyRecentLimit = v;
+          history_apply_limit();
+        }catch(...){
+        }
       }
     }
   }
@@ -279,6 +290,8 @@ inline void load_settings(const std::string& path){
       return;
     }
   }
+
+  history_apply_limit();
 }
 
 inline void save_settings(const std::string& path){
@@ -297,6 +310,7 @@ inline void save_settings(const std::string& path){
   out << "prompt.input_ellipsis.enabled=" << (g_settings.promptInputEllipsisEnabled ? "true" : "false") << "\n";
   out << "prompt.input_ellipsis.left_width=" << g_settings.promptInputEllipsisLeftWidth << "\n";
   out << "prompt.input_ellipsis.right_width=" << g_settings.promptInputEllipsisRightWidth << "\n";
+  out << "history.recent_limit=" << g_settings.historyRecentLimit << "\n";
   auto pathForTheme = [&](const std::string& theme) -> std::string {
     auto it = g_settings.promptThemeArtPaths.find(theme);
     if(it == g_settings.promptThemeArtPaths.end()) return "";
@@ -349,6 +363,10 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="prompt.input_ellipsis.right_width"){
     value = std::to_string(g_settings.promptInputEllipsisRightWidth);
+    return true;
+  }
+  if(key=="history.recent_limit"){
+    value = std::to_string(g_settings.historyRecentLimit);
     return true;
   }
   if(key=="prompt.theme_art_path"){
@@ -471,6 +489,24 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     }else{
       g_settings.promptInputEllipsisRightWidth = v;
     }
+    return true;
+  }
+  if(key=="history.recent_limit"){
+    int v = 0;
+    try{
+      size_t idx = 0;
+      v = std::stoi(value, &idx);
+      if(idx != value.size()) throw std::invalid_argument("extra");
+    }catch(...){
+      error = "invalid_value";
+      return false;
+    }
+    if(v < 0){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.historyRecentLimit = v;
+    history_apply_limit();
     return true;
   }
   if(key=="prompt.theme_art_path"){

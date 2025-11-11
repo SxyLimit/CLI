@@ -233,6 +233,7 @@ struct AppSettings {
   bool promptInputEllipsisEnabled = false;
   int  promptInputEllipsisLeftWidth = 30;
   int  promptInputEllipsisRightWidth = 50;
+  int  historyRecentLimit = 10;
   std::string configHome;
 };
 
@@ -317,3 +318,8 @@ void llm_initialize();
 void llm_poll();
 bool llm_has_unread();
 void llm_mark_seen();
+
+// ===== Command history =====
+void history_record_command(const std::string& command);
+const std::vector<std::string>& history_recent_commands();
+void history_apply_limit();
