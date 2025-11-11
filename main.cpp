@@ -200,6 +200,33 @@ static std::string trim_copy(const std::string& s){
   return s.substr(a, b - a);
 }
 
+static std::vector<std::string> g_command_history;
+
+void history_apply_limit(){
+  int limit = g_settings.historyRecentLimit;
+  if(limit <= 0){
+    g_command_history.clear();
+    return;
+  }
+  size_t maxSize = static_cast<size_t>(limit);
+  if(g_command_history.size() > maxSize){
+    g_command_history.resize(maxSize);
+  }
+}
+
+void history_record_command(const std::string& command){
+  std::string trimmed = trim_copy(command);
+  if(trimmed.empty()) return;
+  auto it = std::remove(g_command_history.begin(), g_command_history.end(), trimmed);
+  g_command_history.erase(it, g_command_history.end());
+  g_command_history.insert(g_command_history.begin(), trimmed);
+  history_apply_limit();
+}
+
+const std::vector<std::string>& history_recent_commands(){
+  return g_command_history;
+}
+
 static void load_env_overrides(){
   static bool loaded = false;
   if(loaded) return;
@@ -2939,15 +2966,19 @@ int main(){
 
     if(ch=='\n' || ch=='\r'){
       std::cout << "\n";
-      if(!buf.empty()){
+      std::string trimmedInput = trim_copy(buf);
+      if(!trimmedInput.empty()){
+        history_record_command(buf);
         auto tks = splitTokens(buf);
-        if(tks[0]=="help"){
-          if(tks.size()==1) printHelpAll();
-          else printHelpOne(tks[1]);
-        }else{
-          execToolLine(buf);
-          if(!g_parse_error_cmd.empty()){ printHelpOne(g_parse_error_cmd); g_parse_error_cmd.clear(); }
-          if(g_should_exit){ std::cout<<ansi::DIM<<"bye"<<ansi::RESET<<"\n"; break; }
+        if(!tks.empty()){
+          if(tks[0]=="help"){
+            if(tks.size()==1) printHelpAll();
+            else printHelpOne(tks[1]);
+          }else{
+            execToolLine(buf);
+            if(!g_parse_error_cmd.empty()){ printHelpOne(g_parse_error_cmd); g_parse_error_cmd.clear(); }
+            if(g_should_exit){ std::cout<<ansi::DIM<<"bye"<<ansi::RESET<<"\n"; break; }
+          }
         }
       }
       message_poll();
@@ -2972,8 +3003,14 @@ int main(){
       if(haveCand && total>0){
         CursorWordInfo wordCtx = analyzeWordAtCursor(buf, cursorByte);
         const std::string& label = cand.labels[sel];
-        buf = wordCtx.beforeWord + label + wordCtx.afterWord;
-        cursorByte = wordCtx.beforeWord.size() + label.size();
+        auto tokensNow = splitTokens(buf);
+        if(!tokensNow.empty() && tokensNow[0] == "p"){
+          buf = label;
+          cursorByte = label.size();
+        }else{
+          buf = wordCtx.beforeWord + label + wordCtx.afterWord;
+          cursorByte = wordCtx.beforeWord.size() + label.size();
+        }
         sel=0;
         needRender = true;
       }

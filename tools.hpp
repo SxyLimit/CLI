@@ -21,6 +21,7 @@
 #include "tools/cat.hpp"
 #include "tools/mv.hpp"
 #include "tools/rm.hpp"
+#include "tools/p.hpp"
 
 inline std::vector<std::string> render_mycli_ascii_art() {
   return {
@@ -1099,6 +1100,7 @@ inline void register_tools_from_config(const std::string& path){
 inline void register_all_tools(){
   REG.registerTool(tool::make_show_tool());
   REG.registerTool(tool::make_clear_tool());
+  REG.registerTool(tool::make_p_tool());
   REG.registerTool(tool::make_setting_tool());
   REG.registerTool(tool::make_run_tool());
   REG.registerTool(tool::make_llm_tool());

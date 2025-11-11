@@ -72,6 +72,7 @@ This project now uses the redesigned tool architecture. Please follow these rule
 
 ## Documentation hygiene
 - Whenever you add, remove, or significantly update a built-in tool (or change this workflow), reflect the change in `README.md` in the same pull request.
+- **中文提醒**：每次新增或调整内置工具时，必须同步在 `README.md` 中补充或更新该工具的使用说明。
 
 ## Testing & style
 - Prefer returning `ToolExecutionResult` instances from tool logic rather than writing to stdout directly. If legacy behaviour requires printing, keep it inside the executor function so that silent invocations work correctly.
