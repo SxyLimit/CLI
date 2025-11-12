@@ -84,10 +84,15 @@ HOME_PATH=settings
 
 ## LLM 命令使用说明
 
-`llm` 命令由 `tools/llm.py` 实现，提供与大模型的简单交互：
+`llm` 命令由 `tools/llm.py` 实现，并默认持久化多轮会话（保存在 `./settings/mycli_llm_history.json`）：
 
-- `llm call <消息>`：异步发送文本到模型并立即返回，问答历史写入配置目录（默认 `./settings/mycli_llm_history.json`），等待模型返回后提示符前会出现红色 `[L]` 提醒。
-- `llm recall`：查看最近一次调用的提示词与回复，同时清除 `[L]` 提醒。
+- `llm call <消息>`：异步发送文本到模型并立即返回。当前会话的完整上下文（含系统提示词与历史消息）会一并交给模型，等待返回时提示符前会出现红色 `[L]` 提醒。
+- `llm recall`：查看当前会话的完整对话历史，同时清除 `[L]` 提醒。
+- `llm new`：创建一个全新的会话并自动切换过去，初始名称为 `未命名<N>-YYYYMMDDHHMMSS`。
+- `llm switch <对话>`：切换到已有会话，支持补全会话名称。
+- `llm rename <名称>`：为当前会话修改名称前缀，后缀中的时间戳保持创建时的值不变。
+
+每个新会话在首次与模型对话后，会自动将历史消息再次发送给模型以生成一个不超过 10 个字的标题，实际存储格式为 `标题-YYYYMMDDHHMMSS`。
 
 默认使用 Moonshot 的 `kimi-k2-turbo-preview` 模型，并支持通过 `.env` 或环境变量覆盖以下配置：
 
