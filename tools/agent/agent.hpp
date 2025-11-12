@@ -769,6 +769,13 @@ inline std::string summarize_transcript_payload(const std::string& eventKind, co
     }
     return type;
   }
+  if(eventKind == "parse_error"){
+    std::string raw = findString("raw");
+    bool looksJson = findBool("looks_json", false);
+    if(raw.empty()) return looksJson? std::string("parse_error") : std::string("non-json output");
+    std::string prefix = looksJson? std::string("parse_error ") : std::string("stderr ");
+    return prefix + truncate_summary(raw, 80);
+  }
   if(eventKind == "artifact"){
     std::string name = findString("name");
     std::string path = findString("path");
@@ -1006,15 +1013,26 @@ inline void agent_session_thread_main(std::shared_ptr<AgentSession> session, std
     while(running && session->receive_message(line)){
       if(line.empty()) continue;
       sj::Value msg;
+      bool parsed = false;
       try{
         msg = sj::parse(line);
+        parsed = true;
       }catch(const std::exception&){
-        sj::Object err;
-        err.emplace("type", sj::Value("error"));
-        err.emplace("message", sj::Value("invalid json"));
-        sj::Value errVal(std::move(err));
-        session->send_message(errVal);
-        session->record_event("receive", sj::make_object({{"type", sj::Value("parse_error")}}));
+      }
+      if(!parsed){
+        bool looksJson = !line.empty() && (line.front() == '{' || line.front() == '[');
+        sj::Object payload;
+        payload.emplace("raw", sj::Value(line));
+        payload.emplace("looks_json", sj::Value(looksJson));
+        session->record_event("parse_error", sj::Value(std::move(payload)));
+        if(looksJson){
+          sj::Object err;
+          err.emplace("type", sj::Value("error"));
+          err.emplace("message", sj::Value("invalid json"));
+          sj::Value errVal(std::move(err));
+          session->record_event("send", errVal);
+          session->send_message(errVal);
+        }
         continue;
       }
       session->record_event("receive", msg);
