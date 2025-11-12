@@ -23,23 +23,51 @@ HOME_PATH=settings
 ## 主要特性
 
 - **命令注册与帮助**：通过 `ToolRegistry` 注册内置工具，可使用 `help` 查看命令说明。
-- **路径补全与类型校验**：根据命令占位符或选项定义推断路径类型（文件/目录），补全时自动过滤；当输入不存在或类型不符时，以红色/黄色提示错误原因。
+- **路径补全与类型校验**：根据命令占位符或选项定义推断路径类型（文件/目录），补全时自动过滤；支持为文件参数声明允许的后缀（例如 `.climg`），同时在帮助文档与错误提示中给出明确指引。
+- **命令委托**：`run <command> [args...]` 会在当前 shell 中执行任意系统命令，参数使用 `shellEscape` 逐项转义，便于临时调用外部工具。
 - **候选提示与 Ghost 文本**：在输入行下方展示至多三个候选项，输入末尾补全不存在时给出上下文提示。
+- **历史命令补全**：输入 `p` 后加空格即可调出最近使用的命令列表，按 Tab 将选中的历史指令直接填入输入行，也可以单独执行 `p` 查看带编号的历史记录。
 - **状态栏扩展**：可通过 `StatusProvider` 注册自定义状态（示例中显示当前工作目录）。
 - **外部工具配置**：支持在配置目录（默认 `./settings/`）下的 `mycli_tools.conf` 中用 INI 语法新增命令及子命令，含互斥选项、动态执行等。
 - **消息提醒**：可监听指定目录（默认当前目录下的 `message/`）中的 `.md` 文件，新建或修改后提示符前会显示红色 `[M]`，通过 `message list/last/detail` 查看。
 - **可定制提示符**：通过设置 `prompt.name` 与 `prompt.theme` 自定义提示符名称及颜色。提供纯蓝、蓝紫、红黄渐变与紫橙渐变四种主题，并可为任意主题配置结构化图片（`prompt.theme_art_path.<theme>`）以在 `show MyCLI` 中输出彩色图案。
 - **LLM 接口**：提供 `llm` 命令，调用 `tools/llm.py` 通过 Moonshot(Kimi) 接口（或本地回显模式）完成调用与历史查看。
 
+## 内置工具速查
+
+| 命令 | 基本用法 | 说明 |
+| --- | --- | --- |
+| `show` | `show LICENSE`<br>`show MyCLI` | 查看随项目附带的许可证与 MyCLI 信息。 |
+| `clear` | `clear` | 清空屏幕并将光标重置到左上角。 |
+| `p` | `p`<br>`p` 后接空格再按 <kbd>Tab</kbd> | 列出最近输入的命令；在 `p` 后加空格触发历史补全，按 Tab 将选中的指令直接填入输入框。 |
+| `setting` | `setting get [键前缀…]`<br>`setting set <完整键> <值>` | 读取或修改配置项，支持层级补全、布尔/枚举/路径提示等，详见下文“设置命令”。 |
+| `run` | `run <command> [args…]` | 逐项转义后执行任意系统命令。 |
+| `llm` | `llm call <消息…>`<br>`llm recall` | 通过 Python 助手异步调用 Moonshot/Kimi 接口并查看最近一次回复。 |
+| `message` | `message list`<br>`message last`<br>`message detail <文件>` | 监听 Markdown 通知目录，列出未读文件、查看最近修改的文件，或按文件名读取具体内容。 |
+| `cd` | `cd <路径>`<br>`cd -o [-a|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 隐藏路径、`-c` 显示完整路径，默认省略父目录）。 |
+| `ls` | `ls [-a] [-l] [目录]` | 简化版目录列表，支持展示隐藏文件与长列表模式。 |
+| `cat` | `cat <file> [file2 …] [--pipe <command>]` | 输出一个或多个文件内容（总计 ≤1MB）；也可将内容通过管道写入外部命令。 |
+| `mv` | `mv <source> <target>` | 移动或重命名文件/目录。 |
+| `rm` | `rm [-r] <path> [更多路径]` | 删除文件，带 `-r` 可递归删除目录。 |
+| `exit` / `quit` | `exit` 或 `quit` | 结束 REPL 会话。 |
+
 ## 配置目录
 
-- 默认情况下，所有配置文件存放在 `./settings/` 目录中，包括 `mycli_settings.json`、`mycli_tools.conf` 与 `mycli_llm_history.json`。
+- 默认情况下，所有配置文件存放在 `./settings/` 目录中，包括 `mycli_settings.conf`、`mycli_tools.conf` 与 `mycli_llm_history.json`。
+- `mycli_settings.conf` 采用逐行 `key=value` 的纯文本格式，方便手动编辑；不要误认为是 JSON 文件。
 - 运行时可通过 `setting set home.path <目录>` 修改配置目录，CLI 会自动迁移已有文件并更新监听路径。
 - 也可以在 `.env` 或系统环境变量中设置 `HOME_PATH=<目录>`，用于在启动前指定配置目录位置。
 
+## 设置命令
+
+- `setting get [分段…]`：不带参数时列出所有配置项；指定某个分支前缀时，会输出该子树下的所有键和值，传入完整键则展示对应的单项。
+- `setting set <分段…> <值>`：修改某个完整键的值，支持根据键类型提供布尔、枚举、文件路径等自动补全提示（输入 `/`、`./` 后可继续补全路径）。
+
+每一级分段都可以使用补全按键查看可用的下一层节点，确保在输入 `set` 时始终能够补全到最终叶子节点后再录入新值。
+
 ## 消息提醒与查看
 
-1. 默认监听当前目录下的 `message/` 文件夹，可使用 `setting set message.folder <路径>` 改为其他目录。
+1. 默认监听当前目录下的 `message/` 文件夹，可使用 `setting set message.folder <路径>` 改为其他目录，按 <kbd>Tab</kbd> 可直接补全目录路径。
 2. 当监听目录中的 `.md` 文件新建或修改时，提示符前会出现红色 `[M]`，表示仍有未读内容。
 3. 使用 `message list` 查看所有未读文件，`message last` 查看最近修改的文件内容，或通过 `message detail <文件名>` 定位并阅读指定文件。
 
@@ -49,8 +77,10 @@ HOME_PATH=settings
 
 - `setting set prompt.name <名称>`：调整提示符名称，留空则恢复默认的 `mycli`。
 - `setting set prompt.theme <blue|blue-purple|red-yellow|purple-orange>`：在纯蓝与多种渐变主题之间切换。
-- `setting set prompt.theme_art_path.<theme> <path>`：为指定主题配置图片结构化文本路径（例如 `prompt.theme_art_path.red-yellow`），搭配 `tools/image_to_art.py` 生成即可在 `show MyCLI` 中显示彩色图片。
-- `setting set prompt.theme_art_path <path>`：兼容旧配置的别名，等价于设置 `prompt.theme_art_path.blue-purple`。
+- `setting set prompt.input_ellipsis.enabled <true|false>`：开启后，当输入或自动补全内容超过指定长度时，会围绕光标保留左右两侧的可视窗口，并用 `.` 填充被截断的区域，避免光标被推到屏幕之外。
+- `setting set prompt.input_ellipsis.left_width <列宽>` / `setting set prompt.input_ellipsis.right_width <列宽>`：分别配置光标左侧可保留的最大宽度与整体可视窗口的最大显示宽度（单位为等宽字符数），默认值分别为 `30` 与 `50`，必须为非负整数。
+- `setting set history.recent_limit <数量>`：调整历史指令最多保留的条目数（默认 10，设为 0 可禁用历史记录）。
+- `setting set prompt.theme_art_path.<theme> <path>`：为指定主题配置图片结构化文本路径（例如 `prompt.theme_art_path.red-yellow`），仅接受 `.climg` 文件并在补全时只展示目录与 `.climg` 文件；搭配 `tools/image_to_art.py` 生成即可在 `show MyCLI` 中显示彩色图片（旧版本的 `prompt.theme_art_path` 仍作为 `prompt.theme_art_path.blue-purple` 的别名保留）。
 
 ## LLM 命令使用说明
 
@@ -89,6 +119,21 @@ positional=<text>
 
 上述示例会在 CLI 中注册 `ai translate` 子命令，并通过 `python3 tools/ai_translate.py` 执行。脚本内部可以使用任意外部 SDK（例如请求自己的推理服务）。
 
+`optionPaths` 和 `positionalPaths` 支持声明路径类型与后缀过滤：
+
+```ini
+[image-art]
+summary=Convert images into MyCLI art
+type=python
+exec=python3
+script=./tools/image_to_art.py
+positional=<input> <output>
+positionalPaths=1:file,2:file:.climg
+```
+
+上述配置会将第一个位置参数视为源文件，第二个位置参数限制为 `.climg` 输出文件。补全、帮助文本与错误提示会自动同步这一要求。
+同理，`optionPaths=--output:file:.climg|.png` 可用于限制选项值的后缀范围。
+
 如果需要调用系统命令或 HTTP 客户端，同样可以将 `type` 设置为 `system`，并在 `exec` 字段中填写可执行文件名称或绝对路径，CLI 会负责参数拼接与补全。例如：
 
 ```ini
@@ -106,12 +151,16 @@ positional=<url>
 
 - `main.cpp`：REPL 主循环、渲染及补全逻辑。
 - `globals.hpp`：公共类型、辅助函数与全局状态声明。
-- `tools.hpp`：路径补全实现、命令/状态注册、动态工具加载。
+- `tools.hpp`：路径补全实现、核心内置命令（`show`/`setting`/`exit`）以及所有工具的统一注册入口。
+- `tools/tool_common.hpp`：为各个工具头文件提供共享的执行辅助函数与类型。
+- `tools/*.hpp`：每个内置命令对应一个独立头文件（例如 `tools/ls.hpp`、`tools/cat.hpp`、`tools/mv.hpp`），包含 UI 定义、执行逻辑以及 `tool::make_*_tool()` 工厂函数。
 - `tools/pytool.py`：示例 Python 工具脚本。
-- `settings/`：默认配置目录，包含 `mycli_settings.json`、`mycli_tools.conf`、`mycli_llm_history.json`。
+- `tools/image_to_art.py`：将图片转为 `.climg` 结构化文本的脚本，可配合动态工具 `image-art` 使用。
+- `settings/`：默认配置目录，包含 `mycli_settings.conf`、`mycli_tools.conf`、`mycli_llm_history.json`。
 
 ## 开发提示
 
 - 所有可执行文件均需使用 C++17 编译。
-- 若新增命令，记得在 `register_all_tools()` 中注册并为选项配置合适的路径类型。
-- 自定义补全策略时，可复用 `pathCandidatesForWord` 与 `analyzePositionalPathContext` 等辅助函数。
+- 若新增命令，记得在 `register_all_tools()` 中注册并为选项或位置参数配置合适的路径类型/后缀（使用 `tool::positional(...)` 和 `OptionSpec::allowedExtensions`）。
+- 自定义补全策略时，可复用 `pathCandidatesForWord` 与 `analyzePositionalPathContext` 等辅助函数，必要时传入扩展名列表与目录控制参数。
+- 按照“一命令一文件”的约定扩展内置工具：在 `tools/` 目录下创建 `<name>.hpp`，实现 `ToolSpec`/执行逻辑/可选补全工厂，随后在 `tools.hpp` 中 `#include` 新文件并调用 `REG.registerTool(tool::make_<name>_tool())`；完成后同步更新本文档中相关说明。

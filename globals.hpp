@@ -47,9 +47,13 @@ inline std::string join(const std::vector<std::string>& v, const std::string& se
 inline bool isDirFS(const std::string& path){ struct stat st{}; return ::stat(path.c_str(),&st)==0 && S_ISDIR(st.st_mode); }
 inline std::string basenameOf(const std::string& p){
   if(p.empty()) return p;
-  std::string s=p; while(s.size()>1 && s.back()=='/') s.pop_back();
-  size_t pos=s.find_last_of('/'); if(pos==std::string::npos) return s;
-  if(pos==s.size()-1) return s; return s.substr(pos+1);
+  auto isSep = [](char ch){ return ch=='/' || ch=='\\'; };
+  std::string s = p;
+  while(s.size()>1 && isSep(s.back())) s.pop_back();
+  size_t pos = s.find_last_of("/\\");
+  if(pos==std::string::npos) return s;
+  if(pos==s.size()-1) return s;
+  return s.substr(pos+1);
 }
 
 // last word split
@@ -72,12 +76,23 @@ struct OptionSpec {
   std::string placeholder;
   bool isPath = false;
   PathKind pathKind = PathKind::Any;
+  bool allowDirectory = true;
+  std::vector<std::string> allowedExtensions;
+};
+
+struct PositionalArgSpec {
+  std::string placeholder;
+  bool isPath = false;
+  PathKind pathKind = PathKind::Any;
+  std::vector<std::string> allowedExtensions;
+  bool allowDirectory = true;
+  bool inferFromPlaceholder = true;
 };
 
 struct SubcommandSpec {
   std::string name;
   std::vector<OptionSpec> options;
-  std::vector<std::string> positional;                 // e.g. {"<path>", "[<file>]", "<dir...>"}
+  std::vector<PositionalArgSpec> positional;           // e.g. {"<path>", "[<file>]", "<dir...>"}
   std::map<std::string, std::vector<std::string>> mutexGroups;
   std::function<void(const std::vector<std::string>&)> handler;
 };
@@ -86,10 +101,27 @@ struct ToolSpec {
   std::string name;
   std::string summary;
   std::map<std::string, std::string> summaryLocales;
+  std::string help;
+  std::map<std::string, std::string> helpLocales;
   std::vector<OptionSpec> options;                     // global/options
-  std::vector<std::string> positional;                 // command-level positional
+  std::vector<PositionalArgSpec> positional;           // command-level positional
   std::vector<SubcommandSpec> subs;                    // subcommands
   std::function<void(const std::vector<std::string>&)> handler;
+};
+
+struct ToolExecutionRequest {
+  std::vector<std::string> tokens;
+  bool silent = false;
+  bool forLLM = false;
+};
+
+struct ToolExecutionResult {
+  int exitCode = 0;
+  std::string output;
+  std::optional<std::string> display;
+
+  bool succeeded() const { return exitCode == 0; }
+  std::string viewForCli() const { return display.has_value() ? *display : output; }
 };
 
 struct MatchResult {
@@ -117,6 +149,16 @@ struct Candidates {
   std::vector<MatchResult> matchDetails;
 };
 
+using ToolExecutor = std::function<ToolExecutionResult(const ToolExecutionRequest&)>;
+using ToolCompletionProvider = std::function<Candidates(const std::string& buffer,
+                                                        const std::vector<std::string>& tokens)>;
+
+struct ToolDefinition {
+  ToolSpec ui;
+  ToolExecutor executor;
+  ToolCompletionProvider completion;
+};
+
 MatchResult compute_match(const std::string& candidate, const std::string& pattern);
 void sortCandidatesByMatch(const std::string& query, Candidates& cand);
 
@@ -126,11 +168,14 @@ struct StatusProvider {
 };
 
 struct ToolRegistry {
-  std::map<std::string, ToolSpec> tools;
+  std::map<std::string, ToolDefinition> tools;
   std::vector<StatusProvider> statusProviders;
 
-  void registerTool(const ToolSpec& t){ tools[t.name] = t; }
-  const ToolSpec* find(const std::string& n) const {
+  void registerTool(const ToolDefinition& def){ tools[def.ui.name] = def; }
+  ToolDefinition* find(const std::string& n){
+    auto it = tools.find(n); return it==tools.end()? nullptr : &it->second;
+  }
+  const ToolDefinition* find(const std::string& n) const {
     auto it = tools.find(n); return it==tools.end()? nullptr : &it->second;
   }
   std::vector<std::string> listNames() const {
@@ -152,7 +197,11 @@ extern bool         g_should_exit;
 extern std::string  g_parse_error_cmd;
 
 // ===== Shared decls (inline impl in tools.hpp) =====
-Candidates pathCandidatesForWord(const std::string& fullBuf, const std::string& word, PathKind kind = PathKind::Any);
+Candidates pathCandidatesForWord(const std::string& fullBuf,
+                                 const std::string& word,
+                                 PathKind kind = PathKind::Any,
+                                 const std::vector<std::string>* extensions = nullptr,
+                                 bool allowDirectories = true);
 std::string renderCommandGhost(const ToolSpec& spec, const std::vector<std::string>& toks);
 std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& sub,
                            const std::vector<std::string>& toks, size_t subIdx,
@@ -181,6 +230,10 @@ struct AppSettings {
   std::string promptName = "mycli";
   std::string promptTheme = "blue";
   std::map<std::string, std::string> promptThemeArtPaths;
+  bool promptInputEllipsisEnabled = false;
+  int  promptInputEllipsisLeftWidth = 30;
+  int  promptInputEllipsisRightWidth = 50;
+  int  historyRecentLimit = 10;
   std::string configHome;
 };
 
@@ -211,7 +264,9 @@ std::vector<std::string> settings_list_keys();
 std::string tr(const std::string& key);
 std::string trFmt(const std::string& key, const std::map<std::string, std::string>& values);
 std::string localized_tool_summary(const ToolSpec& spec);
+std::string localized_tool_help(const ToolSpec& spec);
 void set_tool_summary_locale(ToolSpec& spec, const std::string& lang, const std::string& value);
+void set_tool_help_locale(ToolSpec& spec, const std::string& lang, const std::string& value);
 const std::string& settings_file_path();
 const std::string& config_home();
 bool set_config_home(const std::string& path, std::string& error);
@@ -237,16 +292,34 @@ std::optional<std::string> message_resolve_label(const std::string& label);
 std::vector<std::string> message_all_file_labels();
 
 // ===== Prompt badges =====
-struct PromptBadge {
+struct PromptIndicatorDescriptor {
   std::string id;
-  char letter = 0;
-  std::function<bool()> active;
+  std::string text;
+  std::string bracketColor = ansi::WHITE;
 };
 
-void register_prompt_badge(const PromptBadge& badge);
+struct PromptIndicatorState {
+  bool visible = false;
+  std::string text;
+  std::string textColor = ansi::WHITE;
+  std::string bracketColor = ansi::WHITE;
+};
+
+void register_prompt_indicator(const PromptIndicatorDescriptor& desc);
+void update_prompt_indicator(const std::string& id, const PromptIndicatorState& state);
+PromptIndicatorState prompt_indicator_current(const std::string& id);
+
+void llm_set_pending(bool pending);
+
+ToolExecutionResult invoke_registered_tool(const std::string& line, bool silent = true);
 
 // ===== LLM watcher =====
 void llm_initialize();
 void llm_poll();
 bool llm_has_unread();
 void llm_mark_seen();
+
+// ===== Command history =====
+void history_record_command(const std::string& command);
+const std::vector<std::string>& history_recent_commands();
+void history_apply_limit();

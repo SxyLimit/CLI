@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("input", type=Path, help="Path to the source image")
-    parser.add_argument("output", type=Path, help="Path to the generated structured text file")
+    parser.add_argument("output", type=Path, help="Path to the generated .climg file")
     parser.add_argument(
         "--max-width",
         type=positive_int,
@@ -78,6 +78,9 @@ def main() -> None:
 
     if not args.input.exists():
         raise SystemExit(f"input image not found: {args.input}")
+
+    if args.output.suffix != ".climg":
+        args.output = args.output.with_suffix(".climg")
 
     image = Image.open(args.input).convert("RGB")
     image = resize_image(image, args.max_width, args.max_height, not args.no_keep_aspect)
