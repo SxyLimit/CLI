@@ -227,6 +227,49 @@ const std::vector<std::string>& history_recent_commands(){
   return g_command_history;
 }
 
+bool agent_tools_exposed(){
+  return g_settings.agentExposeFsTools;
+}
+
+bool tool_visible_in_ui(const ToolSpec& spec){
+  if(spec.requiresExplicitExpose && !agent_tools_exposed()) return false;
+  if(spec.hidden && !agent_tools_exposed()) return false;
+  return true;
+}
+
+bool tool_accessible_to_user(const ToolSpec& spec, bool forLLM){
+  if(forLLM) return true;
+  if(spec.requiresExplicitExpose && !agent_tools_exposed()) return false;
+  return true;
+}
+
+void agent_indicator_clear(){
+  PromptIndicatorState state = prompt_indicator_current("agent");
+  state.visible = false;
+  state.text = "A";
+  state.textColor = ansi::WHITE;
+  state.bracketColor = ansi::WHITE;
+  update_prompt_indicator("agent", state);
+}
+
+void agent_indicator_set_running(){
+  PromptIndicatorState state = prompt_indicator_current("agent");
+  state.visible = true;
+  state.text = "A";
+  state.textColor = ansi::YELLOW;
+  state.bracketColor = ansi::WHITE;
+  update_prompt_indicator("agent", state);
+}
+
+void agent_indicator_set_finished(){
+  PromptIndicatorState state = prompt_indicator_current("agent");
+  state.visible = true;
+  state.text = "A";
+  state.textColor = ansi::RED;
+  state.bracketColor = ansi::WHITE;
+  update_prompt_indicator("agent", state);
+}
+
 static void load_env_overrides(){
   static bool loaded = false;
   if(loaded) return;
@@ -2607,6 +2650,11 @@ static void renderBelowThree(const std::string& status, int status_len,
 static void execToolLine(const std::string& line){
   auto toks = splitTokens(line); if(toks.empty()) return;
   const ToolDefinition* def = REG.find(toks[0]); if(!def){ std::cout<<trFmt("unknown_command", {{"name", toks[0]}})<<"\n"; return; }
+  if(!tool_accessible_to_user(def->ui, false)){
+    std::cout << "command " << toks[0] << " is reserved for the automation agent. "
+              << "Enable it with `setting set agent.fs_tools.expose true`.\n";
+    return;
+  }
   if(!def->executor){ std::cout<<"no handler\n"; return; }
   ToolExecutionRequest req;
   req.tokens = toks;
@@ -2631,6 +2679,13 @@ ToolExecutionResult invoke_registered_tool(const std::string& line, bool silent)
     res.display = res.output;
     return res;
   }
+  if(!tool_accessible_to_user(def->ui, req.forLLM)){
+    ToolExecutionResult res;
+    res.exitCode = 1;
+    res.output = "command " + req.tokens[0] + " is restricted to the automation agent.\n";
+    res.display = res.output;
+    return res;
+  }
   return def->executor(req);
 }
 static void printHelpAll(){
@@ -2650,7 +2705,9 @@ static void printHelpAll(){
 }
 static void printHelpOne(const std::string& name){
   const ToolDefinition* def = REG.find(name);
-  if(!def){ std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return; }
+  if(!def || !tool_visible_in_ui(def->ui)){
+    std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return;
+  }
   const ToolSpec& spec = def->ui;
   std::string summary = localized_tool_summary(spec);
   if(summary.empty()) std::cout<<name<<"\n";
@@ -2714,6 +2771,8 @@ int main(){
 
   register_prompt_indicator(PromptIndicatorDescriptor{"message", "M"});
   register_prompt_indicator(PromptIndicatorDescriptor{"llm", "L"});
+  register_prompt_indicator(PromptIndicatorDescriptor{"agent", "A"});
+  agent_indicator_clear();
 
   // 1) 注册内置工具与状态
   register_all_tools();

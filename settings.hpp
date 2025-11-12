@@ -50,6 +50,7 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"prompt.input_ellipsis.enabled", {SettingValueKind::Boolean, {"false", "true"}}},
     {"prompt.input_ellipsis.left_width", {SettingValueKind::String, {}}},
     {"prompt.input_ellipsis.right_width", {SettingValueKind::String, {}}},
+    {"agent.fs_tools.expose", {SettingValueKind::Boolean, {"false", "true"}}},
     {"home.path", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
     {"history.recent_limit", {SettingValueKind::String, {}}},
   };
@@ -258,6 +259,8 @@ inline void load_settings(const std::string& path){
           if(v >= 0) g_settings.promptInputEllipsisRightWidth = v;
         }catch(...){
         }
+      }else if(key=="agent.fs_tools.expose"){
+        bool b; if(parseBool(val, b)) g_settings.agentExposeFsTools = b;
       }else if(key=="prompt.theme_art_path"){
         if(value_matches_allowed_extensions(settings_key_info(key), val)){
           g_settings.promptThemeArtPaths["blue-purple"] = val;
@@ -311,6 +314,7 @@ inline void save_settings(const std::string& path){
   out << "prompt.input_ellipsis.left_width=" << g_settings.promptInputEllipsisLeftWidth << "\n";
   out << "prompt.input_ellipsis.right_width=" << g_settings.promptInputEllipsisRightWidth << "\n";
   out << "history.recent_limit=" << g_settings.historyRecentLimit << "\n";
+  out << "agent.fs_tools.expose=" << (g_settings.agentExposeFsTools ? "true" : "false") << "\n";
   auto pathForTheme = [&](const std::string& theme) -> std::string {
     auto it = g_settings.promptThemeArtPaths.find(theme);
     if(it == g_settings.promptThemeArtPaths.end()) return "";
@@ -367,6 +371,10 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="history.recent_limit"){
     value = std::to_string(g_settings.historyRecentLimit);
+    return true;
+  }
+  if(key=="agent.fs_tools.expose"){
+    value = g_settings.agentExposeFsTools ? "true" : "false";
     return true;
   }
   if(key=="prompt.theme_art_path"){
@@ -507,6 +515,15 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     }
     g_settings.historyRecentLimit = v;
     history_apply_limit();
+    return true;
+  }
+  if(key=="agent.fs_tools.expose"){
+    bool b;
+    if(!parseBool(value, b)){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.agentExposeFsTools = b;
     return true;
   }
   if(key=="prompt.theme_art_path"){

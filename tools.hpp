@@ -19,9 +19,13 @@
 #include "tools/cd.hpp"
 #include "tools/ls.hpp"
 #include "tools/cat.hpp"
+#include "tools/fs_read.hpp"
+#include "tools/fs_write.hpp"
+#include "tools/fs_tree.hpp"
 #include "tools/mv.hpp"
 #include "tools/rm.hpp"
 #include "tools/p.hpp"
+#include "tools/agent.hpp"
 
 inline std::vector<std::string> render_mycli_ascii_art() {
   return {
@@ -1107,9 +1111,13 @@ inline void register_all_tools(){
   REG.registerTool(tool::make_message_tool());
   REG.registerTool(tool::make_cd_tool());
   REG.registerTool(tool::make_ls_tool());
+  REG.registerTool(tool::make_fs_read_tool());
+  REG.registerTool(tool::make_fs_write_tool());
+  REG.registerTool(tool::make_fs_tree_tool());
   REG.registerTool(tool::make_cat_tool());
   REG.registerTool(tool::make_mv_tool());
   REG.registerTool(tool::make_rm_tool());
+  REG.registerTool(tool::make_agent_tool());
   REG.registerTool(tool::make_exit_tool("exit"));
   REG.registerTool(tool::make_exit_tool("quit"));
 }
