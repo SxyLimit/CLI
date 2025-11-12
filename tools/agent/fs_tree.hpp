@@ -262,7 +262,7 @@ struct FsTree {
 
   static ToolExecutionResult run(const ToolExecutionRequest& request){
     if(request.tokens.size() < 2){
-      g_parse_error_cmd = "fs.tree";
+      set_agent_parse_error(request, "fs.tree");
       return detail::text_result("usage: fs.tree <root> [options]\n", 1);
     }
     FsTreeOptions opts;
@@ -273,12 +273,12 @@ struct FsTree {
       const std::string& tok = request.tokens[i];
       if(tok == "--depth"){
         if(i + 1 >= request.tokens.size()){
-          g_parse_error_cmd = "fs.tree";
+          set_agent_parse_error(request, "fs.tree");
           return detail::text_result("fs.tree: missing value for --depth\n", 1);
         }
         size_t value = 0;
         if(!parse_size_arg(request.tokens[++i], value)){
-          g_parse_error_cmd = "fs.tree";
+          set_agent_parse_error(request, "fs.tree");
           return detail::text_result("fs.tree: invalid depth\n", 1);
         }
         opts.depth = value;
@@ -288,13 +288,13 @@ struct FsTree {
         opts.followSymlinks = true;
       }else if(tok == "--ignore-file"){
         if(i + 1 >= request.tokens.size()){
-          g_parse_error_cmd = "fs.tree";
+          set_agent_parse_error(request, "fs.tree");
           return detail::text_result("fs.tree: missing value for --ignore-file\n", 1);
         }
         opts.ignoreFiles.push_back(request.tokens[++i]);
       }else if(tok == "--ext"){
         if(i + 1 >= request.tokens.size()){
-          g_parse_error_cmd = "fs.tree";
+          set_agent_parse_error(request, "fs.tree");
           return detail::text_result("fs.tree: missing value for --ext\n", 1);
         }
         std::string exts = request.tokens[++i];
@@ -308,28 +308,28 @@ struct FsTree {
         }
       }else if(tok == "--format"){
         if(i + 1 >= request.tokens.size()){
-          g_parse_error_cmd = "fs.tree";
+          set_agent_parse_error(request, "fs.tree");
           return detail::text_result("fs.tree: missing value for --format\n", 1);
         }
         opts.format = request.tokens[++i];
       }else if(tok == "--max-entries"){
         if(i + 1 >= request.tokens.size()){
-          g_parse_error_cmd = "fs.tree";
+          set_agent_parse_error(request, "fs.tree");
           return detail::text_result("fs.tree: missing value for --max-entries\n", 1);
         }
         size_t value = 0;
         if(!parse_size_arg(request.tokens[++i], value)){
-          g_parse_error_cmd = "fs.tree";
+          set_agent_parse_error(request, "fs.tree");
           return detail::text_result("fs.tree: invalid max entries\n", 1);
         }
         opts.maxEntries = std::min(value, cfg.maxTreeEntries);
       }else{
-        g_parse_error_cmd = "fs.tree";
+        set_agent_parse_error(request, "fs.tree");
         return detail::text_result("fs.tree: unknown option " + tok + "\n", 1);
       }
     }
     if(opts.format != "json" && opts.format != "text"){
-      g_parse_error_cmd = "fs.tree";
+      set_agent_parse_error(request, "fs.tree");
       return detail::text_result("fs.tree: --format must be json or text\n", 1);
     }
     if(opts.maxEntries == 0) opts.maxEntries = 1;
@@ -339,7 +339,7 @@ struct FsTree {
     ToolExecutionResult out;
     out.exitCode = exec.exitCode;
     if(exec.exitCode != 0){
-      g_parse_error_cmd = "fs.tree";
+      set_agent_parse_error(request, "fs.tree");
       out.output = exec.errorMessage + "\n";
       sj::Object meta;
       meta.emplace("error", sj::Value(exec.errorCode));

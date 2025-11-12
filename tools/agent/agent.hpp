@@ -4,6 +4,7 @@
 #include "fs_common.hpp"
 #include "fs_read.hpp"
 #include "fs_write.hpp"
+#include "fs_create.hpp"
 #include "fs_tree.hpp"
 #include "../../utils/json.hpp"
 
@@ -36,7 +37,10 @@
 namespace tool {
 
 inline std::vector<ToolDefinition> agent_builtin_tools(){
-  return {tool::make_fs_read_tool(), tool::make_fs_write_tool(), tool::make_fs_tree_tool()};
+  return {tool::make_fs_read_tool(),
+          tool::make_fs_write_tool(),
+          tool::make_fs_create_tool(),
+          tool::make_fs_tree_tool()};
 }
 
 inline std::string sanitize_property_name(const std::string& raw){
@@ -461,6 +465,33 @@ struct AgentSession {
     return tokens;
   }
 
+  std::vector<std::string> args_to_tokens_fs_create(const sj::Value& args){
+    std::vector<std::string> tokens{"fs.create"};
+    if(!args.isObject()) return tokens;
+    const auto& obj = args.asObject();
+    auto pathIt = obj.find("path");
+    if(pathIt != obj.end()) tokens.push_back(pathIt->second.asString());
+    auto addString = [&](const std::string& key, const std::string& optName){
+      auto iter = obj.find(key);
+      if(iter != obj.end()){
+        tokens.push_back(optName);
+        tokens.push_back(iter->second.asString());
+      }
+    };
+    auto addFlag = [&](const std::string& key, const std::string& optName){
+      auto iter = obj.find(key);
+      if(iter != obj.end() && iter->second.asBool(false)) tokens.push_back(optName);
+    };
+    addString("content", "--content");
+    addString("content_file", "--content-file");
+    addString("encoding", "--encoding");
+    addString("eol", "--eol");
+    addFlag("create_parents", "--create-parents");
+    addFlag("atomic", "--atomic");
+    addFlag("dry_run", "--dry-run");
+    return tokens;
+  }
+
   std::vector<std::string> args_to_tokens_fs_tree(const sj::Value& args){
     std::vector<std::string> tokens{"fs.tree"};
     if(!args.isObject()) return tokens;
@@ -506,6 +537,10 @@ struct AgentSession {
     if(name == "fs.write"){
       req.tokens = args_to_tokens_fs_write(args);
       return FsWrite::run(req);
+    }
+    if(name == "fs.create"){
+      req.tokens = args_to_tokens_fs_create(args);
+      return FsCreate::run(req);
     }
     if(name == "fs.tree"){
       req.tokens = args_to_tokens_fs_tree(args);
@@ -779,6 +814,7 @@ inline void agent_session_thread_main(std::shared_ptr<AgentSession> session, std
     sj::Array allowed;
     allowed.push_back(sj::Value("fs.read"));
     allowed.push_back(sj::Value("fs.write"));
+    allowed.push_back(sj::Value("fs.create"));
     allowed.push_back(sj::Value("fs.tree"));
     policy.emplace("allowed_tools", sj::Value(std::move(allowed)));
     policy.emplace("sandbox_root", sj::Value(session->cfg.sandboxRoot.string()));

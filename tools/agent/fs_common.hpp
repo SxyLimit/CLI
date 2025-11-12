@@ -25,10 +25,18 @@ struct AgentFsConfig {
   int toolTimeoutMs = 15000;
 };
 
+inline const std::vector<std::string>& agent_allowed_extensions(){
+  static const std::vector<std::string> exts = {
+    ".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".html", ".css", ".js",
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"
+  };
+  return exts;
+}
+
 inline AgentFsConfig default_agent_fs_config(){
   AgentFsConfig cfg;
   cfg.sandboxRoot = std::filesystem::current_path();
-  cfg.allowedExtensions = {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".html", ".css", ".js"};
+  cfg.allowedExtensions = agent_allowed_extensions();
   return cfg;
 }
 
@@ -159,6 +167,10 @@ inline bool parse_size_arg(const std::string& token, size_t& out){
   }catch(...){
     return false;
   }
+}
+
+inline void set_agent_parse_error(const ToolExecutionRequest& request, const std::string& name){
+  if(!request.forLLM) g_parse_error_cmd = name;
 }
 
 } // namespace tool

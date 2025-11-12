@@ -244,7 +244,6 @@ inline FsWriteResult fs_write_execute(const FsWriteOptions& opts, const AgentFsC
   if(opts.atomic){
     std::filesystem::path tempPath = resolved;
     tempPath += ".tmp-" + random_session_id();
-    bool appendMode = false;
     std::string dataToWrite = finalContent;
     if(!write_text_file(tempPath, dataToWrite, false, ec)){
       std::filesystem::remove(tempPath);
@@ -295,10 +294,11 @@ struct FsWrite {
     set_tool_summary_locale(spec, "zh", "在沙盒内写入文本文件");
     set_tool_help_locale(spec, "en", "fs.write <path> (--content TEXT | --content-file PATH) [--mode overwrite|append] [--encoding utf-8] [--create-parents] [--eol lf|crlf] [--backup] [--atomic] [--dry-run]");
     set_tool_help_locale(spec, "zh", "fs.write <路径> (--content 文本 | --content-file 路径) [--mode overwrite|append] [--encoding utf-8] [--create-parents] [--eol lf|crlf] [--backup] [--atomic] [--dry-run]");
-    spec.positional = {tool::positional("<path>", true, PathKind::File, {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".html", ".css", ".js"}, false)};
+    auto allowed = agent_allowed_extensions();
+    spec.positional = {tool::positional("<path>", true, PathKind::File, allowed, false)};
     spec.options = {
       OptionSpec{"--content", true, {}, nullptr, false, "<text>"},
-      OptionSpec{"--content-file", true, {}, nullptr, false, "<path>", true, PathKind::File, false, {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".html", ".css", ".js"}},
+      OptionSpec{"--content-file", true, {}, nullptr, false, "<path>", true, PathKind::File, false, allowed},
       OptionSpec{"--mode", true, {"overwrite", "append"}, nullptr, false, "<mode>"},
       OptionSpec{"--encoding", true, {"utf-8"}, nullptr, false, "<encoding>"},
       OptionSpec{"--create-parents", false},
@@ -313,7 +313,7 @@ struct FsWrite {
   static ToolExecutionResult run(const ToolExecutionRequest& request){
     const auto& args = request.tokens;
     if(args.size() < 2){
-      g_parse_error_cmd = "fs.write";
+      set_agent_parse_error(request, "fs.write");
       return detail::text_result("usage: fs.write <path> (--content TEXT | --content-file PATH) [options]\n", 1);
     }
     auto cfg = default_agent_fs_config();
@@ -323,27 +323,27 @@ struct FsWrite {
       const std::string& tok = args[i];
       if(tok == "--content"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.write";
+          set_agent_parse_error(request, "fs.write");
           return detail::text_result("fs.write: missing value for --content\n", 1);
         }
         opts.hasContent = true;
         opts.content = args[++i];
       }else if(tok == "--content-file"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.write";
+          set_agent_parse_error(request, "fs.write");
           return detail::text_result("fs.write: missing value for --content-file\n", 1);
         }
         opts.hasContentFile = true;
         opts.contentFile = args[++i];
       }else if(tok == "--mode"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.write";
+          set_agent_parse_error(request, "fs.write");
           return detail::text_result("fs.write: missing value for --mode\n", 1);
         }
         opts.mode = args[++i];
       }else if(tok == "--encoding"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.write";
+          set_agent_parse_error(request, "fs.write");
           return detail::text_result("fs.write: missing value for --encoding\n", 1);
         }
         opts.encoding = args[++i];
@@ -351,7 +351,7 @@ struct FsWrite {
         opts.createParents = true;
       }else if(tok == "--eol"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.write";
+          set_agent_parse_error(request, "fs.write");
           return detail::text_result("fs.write: missing value for --eol\n", 1);
         }
         opts.eol = args[++i];
@@ -362,20 +362,20 @@ struct FsWrite {
       }else if(tok == "--dry-run"){
         opts.dryRun = true;
       }else{
-        g_parse_error_cmd = "fs.write";
+        set_agent_parse_error(request, "fs.write");
         return detail::text_result("fs.write: unknown option " + tok + "\n", 1);
       }
     }
     if(opts.hasContent == opts.hasContentFile){
-      g_parse_error_cmd = "fs.write";
+      set_agent_parse_error(request, "fs.write");
       return detail::text_result("fs.write: specify exactly one of --content or --content-file\n", 1);
     }
     if(opts.mode != "overwrite" && opts.mode != "append"){
-      g_parse_error_cmd = "fs.write";
+      set_agent_parse_error(request, "fs.write");
       return detail::text_result("fs.write: --mode must be overwrite or append\n", 1);
     }
     if(opts.eol != "preserve" && opts.eol != "lf" && opts.eol != "crlf"){
-      g_parse_error_cmd = "fs.write";
+      set_agent_parse_error(request, "fs.write");
       return detail::text_result("fs.write: --eol must be preserve|lf|crlf\n", 1);
     }
 
@@ -383,7 +383,7 @@ struct FsWrite {
     ToolExecutionResult out;
     out.exitCode = exec.exitCode;
     if(exec.exitCode != 0){
-      g_parse_error_cmd = "fs.write";
+      set_agent_parse_error(request, "fs.write");
       out.output = exec.errorMessage + "\n";
       sj::Object meta;
       meta.emplace("error", sj::Value(exec.errorCode));

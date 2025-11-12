@@ -229,7 +229,8 @@ struct FsRead {
     set_tool_summary_locale(spec, "zh", "在沙盒内读取文件内容");
     set_tool_help_locale(spec, "en", "fs.read <path> [--encoding utf-8] [--max-bytes N] [--head N|--tail N] [--offset N --length N] [--with-line-numbers] [--hash-only]");
     set_tool_help_locale(spec, "zh", "fs.read <路径> [--encoding utf-8] [--max-bytes N] [--head N|--tail N] [--offset N --length N] [--with-line-numbers] [--hash-only]");
-    spec.positional = {tool::positional("<path>", true, PathKind::File, {".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".html", ".css", ".js"}, false)};
+    auto allowed = agent_allowed_extensions();
+    spec.positional = {tool::positional("<path>", true, PathKind::File, allowed, false)};
     spec.options = {
       OptionSpec{"--encoding", true, {"utf-8"}, nullptr, false, "<encoding>"},
       OptionSpec{"--max-bytes", true, {}, nullptr, false, "<bytes>"},
@@ -249,7 +250,7 @@ struct FsRead {
     opts.maxBytes = cfg.maxReadBytes;
     const auto& args = request.tokens;
     if(args.size() < 2){
-      g_parse_error_cmd = "fs.read";
+      set_agent_parse_error(request, "fs.read");
       return detail::text_result("usage: fs.read <path> [options]\n", 1);
     }
     opts.path = args[1];
@@ -257,59 +258,59 @@ struct FsRead {
       const std::string& tok = args[i];
       if(tok == "--encoding"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: missing value for --encoding\n", 1);
         }
         opts.encoding = args[++i];
       }else if(tok == "--max-bytes"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: missing value for --max-bytes\n", 1);
         }
         size_t value = 0;
         if(!parse_size_arg(args[++i], value)){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: invalid --max-bytes\n", 1);
         }
         opts.maxBytes = std::min(value, cfg.maxReadBytes);
       }else if(tok == "--head"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: missing value for --head\n", 1);
         }
         opts.hasHead = true;
         if(!parse_size_arg(args[++i], opts.headLines)){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: invalid --head value\n", 1);
         }
       }else if(tok == "--tail"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: missing value for --tail\n", 1);
         }
         opts.hasTail = true;
         if(!parse_size_arg(args[++i], opts.tailLines)){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: invalid --tail value\n", 1);
         }
       }else if(tok == "--offset"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: missing value for --offset\n", 1);
         }
         opts.hasOffset = true;
         if(!parse_size_arg(args[++i], opts.offset)){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: invalid --offset value\n", 1);
         }
       }else if(tok == "--length"){
         if(i + 1 >= args.size()){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: missing value for --length\n", 1);
         }
         opts.hasLength = true;
         if(!parse_size_arg(args[++i], opts.length)){
-          g_parse_error_cmd = "fs.read";
+          set_agent_parse_error(request, "fs.read");
           return detail::text_result("fs.read: invalid --length value\n", 1);
         }
       }else if(tok == "--with-line-numbers"){
@@ -317,23 +318,23 @@ struct FsRead {
       }else if(tok == "--hash-only"){
         opts.hashOnly = true;
       }else{
-        g_parse_error_cmd = "fs.read";
+        set_agent_parse_error(request, "fs.read");
         return detail::text_result("fs.read: unknown option " + tok + "\n", 1);
       }
     }
     if(opts.hasHead && opts.hasTail){
-      g_parse_error_cmd = "fs.read";
+      set_agent_parse_error(request, "fs.read");
       return detail::text_result("fs.read: --head and --tail are mutually exclusive\n", 1);
     }
     if(opts.encoding != "utf-8" && opts.encoding != "utf8"){
-      g_parse_error_cmd = "fs.read";
+      set_agent_parse_error(request, "fs.read");
       return detail::text_result("fs.read: only utf-8 encoding is supported\n", 1);
     }
     auto execResult = fs_read_execute(opts, cfg);
     ToolExecutionResult out;
     out.exitCode = execResult.exitCode;
     if(execResult.exitCode != 0){
-      g_parse_error_cmd = "fs.read";
+      set_agent_parse_error(request, "fs.read");
       out.output = execResult.errorMessage + "\n";
       sj::Object meta;
       meta.emplace("error", sj::Value(execResult.errorCode));
