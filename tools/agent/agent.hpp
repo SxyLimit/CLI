@@ -15,6 +15,9 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <memory>
+#include <thread>
+#include <system_error>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -324,6 +327,10 @@ struct AgentSession {
     return artifactDir / "transcript.jsonl";
   }
 
+  std::filesystem::path summary_path() const{
+    return artifactDir / "summary.txt";
+  }
+
   void mark_latest_session() const{
     std::filesystem::path marker = artifactDir.parent_path() / "latest_agent_session";
     std::error_code ec;
@@ -332,6 +339,16 @@ struct AgentSession {
     if(!ofs.good()) return;
     ofs << sessionId << "\n";
     ofs << transcript_path().string() << "\n";
+  }
+
+  void update_summary(const std::string& text) {
+    finalSummary = text;
+    std::ofstream ofs(summary_path(), std::ios::trunc);
+    if(ofs.good()){
+      ofs << text;
+      if(!text.empty() && text.back() != '\n') ofs << '\n';
+      ofs.close();
+    }
   }
 
   ~AgentSession(){
@@ -707,6 +724,201 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
 #endif
 }
 
+inline void agent_session_thread_main(std::shared_ptr<AgentSession> session, std::string goal){
+#ifndef _WIN32
+  struct IndicatorGuard {
+    bool active = true;
+    void finish(){
+      if(active){
+        active = false;
+        agent_indicator_set_finished();
+      }
+    }
+    ~IndicatorGuard(){ finish(); }
+  } indicatorGuard;
+
+  bool summaryWritten = false;
+  auto record_summary = [&](const std::string& summary){
+    if(summaryWritten) return;
+    summaryWritten = true;
+    session->update_summary(summary);
+    sj::Object data;
+    data.emplace("text", sj::Value(summary));
+    session->record_event("summary", sj::Value(std::move(data)));
+  };
+
+  auto finalize_summary = [&](){
+    if(summaryWritten) return;
+    if(session->finalReceived && !session->finalAnswer.empty()){
+      record_summary(session->finalAnswer);
+    }else if(session->finalReceived){
+      record_summary("Agent session finished without an answer.");
+    }else{
+      record_summary("Agent session ended without a final message.");
+    }
+  };
+
+  auto record_error = [&](const std::string& message){
+    sj::Object err;
+    err.emplace("message", sj::Value(message));
+    session->record_event("error", sj::Value(std::move(err)));
+    record_summary(message);
+  };
+
+  try{
+    sj::Value catalog = build_tool_catalog();
+    sj::Object hello;
+    hello.emplace("type", sj::Value("hello"));
+    hello.emplace("version", sj::Value("1.0"));
+    hello.emplace("tool_catalog", catalog);
+    sj::Object limits;
+    limits.emplace("stdout_bytes", sj::Value(static_cast<long long>(session->stdoutLimit)));
+    limits.emplace("tool_timeout_ms", sj::Value(static_cast<long long>(session->cfg.toolTimeoutMs)));
+    hello.emplace("limits", sj::Value(std::move(limits)));
+    sj::Object policy;
+    sj::Array allowed;
+    allowed.push_back(sj::Value("fs.read"));
+    allowed.push_back(sj::Value("fs.write"));
+    allowed.push_back(sj::Value("fs.tree"));
+    policy.emplace("allowed_tools", sj::Value(std::move(allowed)));
+    policy.emplace("sandbox_root", sj::Value(session->cfg.sandboxRoot.string()));
+    hello.emplace("policy", sj::Value(std::move(policy)));
+    sj::Value helloVal(std::move(hello));
+    session->record_event("send", helloVal);
+    if(!session->send_message(helloVal)){
+      record_error("Failed to send hello message to agent process.");
+      indicatorGuard.finish();
+      return;
+    }
+
+    sj::Object start;
+    start.emplace("type", sj::Value("start"));
+    start.emplace("goal", sj::Value(goal));
+    sj::Object context;
+    context.emplace("cwd", sj::Value(std::filesystem::current_path().string()));
+    start.emplace("context", sj::Value(std::move(context)));
+    sj::Value startVal(std::move(start));
+    session->record_event("send", startVal);
+    if(!session->send_message(startVal)){
+      record_error("Failed to send start message to agent process.");
+      indicatorGuard.finish();
+      return;
+    }
+
+    std::string line;
+    bool running = true;
+    while(running && session->receive_message(line)){
+      if(line.empty()) continue;
+      sj::Value msg;
+      try{
+        msg = sj::parse(line);
+      }catch(const std::exception&){
+        sj::Object err;
+        err.emplace("type", sj::Value("error"));
+        err.emplace("message", sj::Value("invalid json"));
+        sj::Value errVal(std::move(err));
+        session->send_message(errVal);
+        session->record_event("receive", sj::make_object({{"type", sj::Value("parse_error")}}));
+        continue;
+      }
+      session->record_event("receive", msg);
+      const auto* typeField = msg.find("type");
+      if(!typeField) continue;
+      std::string type = typeField->asString();
+      if(type == "tool_call"){
+        const auto* idField = msg.find("id");
+        const auto* nameField = msg.find("name");
+        const auto* argsField = msg.find("args");
+        std::string callId = idField ? idField->asString() : "";
+        std::string toolName = nameField ? nameField->asString() : "";
+        sj::Value args = argsField ? *argsField : sj::Value();
+        ToolExecutionResult res = session->invoke_tool(toolName, args);
+        sj::Object reply;
+        reply.emplace("type", sj::Value("tool_result"));
+        reply.emplace("id", sj::Value(callId));
+        bool truncated = false;
+        std::string stdoutLimited = clamp_stdout(res.output, session->stdoutLimit, truncated);
+        reply.emplace("ok", sj::Value(res.exitCode == 0));
+        reply.emplace("exit_code", sj::Value(res.exitCode));
+        reply.emplace("stdout", sj::Value(stdoutLimited));
+        reply.emplace("stderr", sj::Value(res.stderrOutput.value_or("")));
+        sj::Value meta = meta_from_result(res);
+        if(meta.type() == sj::Value::Type::Object){
+          sj::Object metaObj = meta.asObject();
+          metaObj.emplace("stdout_truncated", sj::Value(truncated));
+          reply.emplace("meta", sj::Value(std::move(metaObj)));
+        }else{
+          reply.emplace("meta", meta);
+        }
+        sj::Value replyVal(std::move(reply));
+        session->record_event("send", replyVal);
+        if(!session->send_message(replyVal)){
+          record_error("Failed to send tool_result to agent process.");
+          running = false;
+        }
+      }else if(type == "log"){
+        // Logs are captured in the transcript; no realtime console output.
+      }else if(type == "final"){
+        const auto* ans = msg.find("answer");
+        if(ans){
+          session->finalAnswer = ans->asString();
+        }
+        const auto* artifactsField = msg.find("artifacts");
+        if(artifactsField && artifactsField->isArray()){
+          const auto& arr = artifactsField->asArray();
+          for(const auto& item : arr){
+            if(!item.isObject()) continue;
+            const auto* nameField = item.find("name");
+            const auto* contentField = item.find("content");
+            if(!nameField || !contentField) continue;
+            std::string name = nameField->asString();
+            std::string safeName = name;
+            for(char& ch : safeName){
+              if(ch == '/' || ch == '\\') ch = '_';
+            }
+            if(safeName.empty()) safeName = "artifact";
+            std::filesystem::path path = session->artifactDir / safeName;
+            std::ofstream ofs(path, std::ios::binary);
+            if(ofs){
+              ofs << contentField->asString();
+              ofs.close();
+              sj::Object rec;
+              rec.emplace("type", sj::Value("artifact"));
+              rec.emplace("name", sj::Value(name));
+              rec.emplace("path", sj::Value(path.string()));
+              session->record_event("artifact", sj::Value(std::move(rec)));
+            }
+          }
+        }
+        session->finalReceived = true;
+        if(!session->finalAnswer.empty()){
+          record_summary(session->finalAnswer);
+        }
+        running = false;
+      }
+    }
+
+    if(running){
+      session->record_event("status", sj::make_object({{"state", sj::Value("helper_disconnected")}}));
+    }
+  }catch(const std::exception& ex){
+    record_error(std::string("Agent worker exception: ") + ex.what());
+    indicatorGuard.finish();
+    return;
+  }catch(...){
+    record_error("Agent worker exception: unknown error");
+    indicatorGuard.finish();
+    return;
+  }
+
+  finalize_summary();
+  indicatorGuard.finish();
+#else
+  (void)session;
+  (void)goal;
+#endif
+}
+
 struct AgentTool {
   static ToolSpec ui(){
     ToolSpec spec;
@@ -782,157 +994,40 @@ struct AgentTool {
       goal += tokens[i];
     }
 #ifndef _WIN32
-    AgentSession session;
-    if(!session.start()){
+    auto session = std::make_shared<AgentSession>();
+    if(!session->start()){
       g_parse_error_cmd = "agent";
       return detail::text_result("agent: failed to start Python helper\n", 1);
     }
-    agent_indicator_set_running();
-    struct IndicatorGuard {
-      bool active = true;
-      ~IndicatorGuard(){ if(active) agent_indicator_set_finished(); }
-    } indicatorGuard;
-    session.mark_latest_session();
-    sj::Value catalog = build_tool_catalog();
-    sj::Object hello;
-    hello.emplace("type", sj::Value("hello"));
-    hello.emplace("version", sj::Value("1.0"));
-    hello.emplace("tool_catalog", catalog);
-    sj::Object limits;
-    limits.emplace("stdout_bytes", sj::Value(static_cast<long long>(session.stdoutLimit)));
-    limits.emplace("tool_timeout_ms", sj::Value(static_cast<long long>(session.cfg.toolTimeoutMs)));
-    hello.emplace("limits", sj::Value(std::move(limits)));
-    sj::Object policy;
-    sj::Array allowed;
-    allowed.push_back(sj::Value("fs.read"));
-    allowed.push_back(sj::Value("fs.write"));
-    allowed.push_back(sj::Value("fs.tree"));
-    policy.emplace("allowed_tools", sj::Value(std::move(allowed)));
-    policy.emplace("sandbox_root", sj::Value(session.cfg.sandboxRoot.string()));
-    hello.emplace("policy", sj::Value(std::move(policy)));
-    sj::Value helloVal(std::move(hello));
-    session.record_event("send", helloVal);
-    session.send_message(helloVal);
-
-    sj::Object start;
-    start.emplace("type", sj::Value("start"));
-    start.emplace("goal", sj::Value(goal));
-    sj::Object context;
-    context.emplace("cwd", sj::Value(std::filesystem::current_path().string()));
-    start.emplace("context", sj::Value(std::move(context)));
-    sj::Value startVal(std::move(start));
-    session.record_event("send", startVal);
-    session.send_message(startVal);
-
-    std::string line;
-    bool running = true;
-    while(running && session.receive_message(line)){
-      if(line.empty()) continue;
-      sj::Value msg;
-      try{
-        msg = sj::parse(line);
-      }catch(const std::exception&){
-        sj::Object err;
-        err.emplace("type", sj::Value("error"));
-        err.emplace("message", sj::Value("invalid json"));
-        sj::Value errVal(std::move(err));
-        session.send_message(errVal);
-        session.record_event("receive", sj::make_object({{"type", sj::Value("parse_error")}}));
-        continue;
-      }
-      session.record_event("receive", msg);
-      const auto* typeField = msg.find("type");
-      if(!typeField){
-        continue;
-      }
-      std::string type = typeField->asString();
-      if(type == "tool_call"){
-        const auto* idField = msg.find("id");
-        const auto* nameField = msg.find("name");
-        const auto* argsField = msg.find("args");
-        std::string callId = idField ? idField->asString() : "";
-        std::string toolName = nameField ? nameField->asString() : "";
-        sj::Value args = argsField ? *argsField : sj::Value();
-        ToolExecutionResult res = session.invoke_tool(toolName, args);
-        sj::Object reply;
-        reply.emplace("type", sj::Value("tool_result"));
-        reply.emplace("id", sj::Value(callId));
-        bool truncated = false;
-        std::string stdoutLimited = clamp_stdout(res.output, session.stdoutLimit, truncated);
-        reply.emplace("ok", sj::Value(res.exitCode == 0));
-        reply.emplace("exit_code", sj::Value(res.exitCode));
-        reply.emplace("stdout", sj::Value(stdoutLimited));
-        reply.emplace("stderr", sj::Value(res.stderrOutput.value_or("")));
-        sj::Value meta = meta_from_result(res);
-        if(meta.type() == sj::Value::Type::Object){
-          sj::Object metaObj = meta.asObject();
-          metaObj.emplace("stdout_truncated", sj::Value(truncated));
-          reply.emplace("meta", sj::Value(std::move(metaObj)));
-        }else{
-          reply.emplace("meta", meta);
-        }
-        sj::Value replyVal(std::move(reply));
-        session.record_event("send", replyVal);
-        session.send_message(replyVal);
-      }else if(type == "log"){
-        const auto* text = msg.find("message");
-        if(text){
-          std::string logLine = text->asString();
-          std::cout << "[agent] " << logLine << "\n";
-        }
-      }else if(type == "final"){
-        const auto* ans = msg.find("answer");
-        if(ans){
-          session.finalAnswer = ans->asString();
-        }
-        const auto* artifactsField = msg.find("artifacts");
-        if(artifactsField && artifactsField->isArray()){
-          const auto& arr = artifactsField->asArray();
-          for(const auto& item : arr){
-            if(!item.isObject()) continue;
-            const auto* nameField = item.find("name");
-            const auto* contentField = item.find("content");
-            if(!nameField || !contentField) continue;
-            std::string name = nameField->asString();
-            std::string safeName = name;
-            for(char& ch : safeName){
-              if(ch == '/' || ch == '\\') ch = '_';
-            }
-            if(safeName.empty()) safeName = "artifact";
-            std::filesystem::path path = session.artifactDir / safeName;
-            std::ofstream ofs(path, std::ios::binary);
-            if(ofs){
-              ofs << contentField->asString();
-              ofs.close();
-              sj::Object rec;
-              rec.emplace("type", sj::Value("artifact"));
-              rec.emplace("name", sj::Value(name));
-              rec.emplace("path", sj::Value(path.string()));
-              session.record_event("artifact", sj::Value(std::move(rec)));
-            }
-          }
-        }
-        session.finalReceived = true;
-        running = false;
-      }
+    session->mark_latest_session();
+    session->update_summary("Agent session is running.");
+    session->record_event("status", sj::make_object({{"state", sj::Value("dispatched")}, {"goal", sj::Value(goal)}}));
+    try{
+      agent_indicator_set_running();
+      std::thread([session, goal]{ agent_session_thread_main(session, goal); }).detach();
+    }catch(const std::system_error& ex){
+      agent_indicator_set_finished();
+      session->update_summary(std::string("Agent dispatch failed: ") + ex.what());
+      session->record_event("summary", sj::make_object({{"text", sj::Value(std::string("Agent dispatch failed: ") + ex.what())}}));
+      session->record_event("error", sj::make_object({{"message", sj::Value(std::string("thread dispatch failed: ") + ex.what())}}));
+      g_parse_error_cmd = "agent";
+      return detail::text_result(std::string("agent: failed to dispatch worker thread: ") + ex.what() + "\n", 1);
     }
 
     ToolExecutionResult out;
     out.exitCode = 0;
     std::ostringstream oss;
-    if(session.finalReceived && !session.finalAnswer.empty()){
-      oss << session.finalAnswer << "\n";
-    }else{
-      oss << "[agent] session finished." << "\n";
-    }
-    oss << "transcript: " << session.artifactDir / "transcript.jsonl" << "\n";
+    oss << "[agent] session " << session->sessionId << " started asynchronously." << "\n";
+    oss << "use `agent monitor` to follow progress (latest session by default)." << "\n";
+    oss << "transcript: " << session->transcript_path() << "\n";
+    oss << "summary: " << session->summary_path() << "\n";
     out.output = oss.str();
     sj::Object meta;
-    meta.emplace("session_id", sj::Value(session.sessionId));
+    meta.emplace("session_id", sj::Value(session->sessionId));
+    meta.emplace("transcript", sj::Value(session->transcript_path().string()));
+    meta.emplace("summary", sj::Value(session->summary_path().string()));
     meta.emplace("duration_ms", sj::Value(0));
     out.metaJson = sj::dump(sj::Value(std::move(meta)));
-    indicatorGuard.active = false;
-    agent_indicator_set_finished();
     return out;
 #else
     g_parse_error_cmd = "agent";

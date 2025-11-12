@@ -126,15 +126,15 @@ HOME_PATH=settings
 
 ## Agent 协作流程
 
-`agent run <goal…>` 会启动 `tools/agent/agent.py`（默认通过 `python3` 调用），并按照行分隔 JSON 协议与 Python 端建立会话：
+`agent run <goal…>` 会启动 `tools/agent/agent.py`（默认通过 `python3` 调用），并按照行分隔 JSON 协议与 Python 端建立会话。命令会在派发后台线程后立即返回，提示如何使用 `agent monitor` 追踪进度：
 
 1. CLI 发送 `hello`（包含工具目录、调用限制与沙盒策略）与 `start`（目标描述、当前工作目录）。
 2. Python Agent 可多次返回 `tool_call` 请求调用 `fs.read` / `fs.write` / `fs.tree`，CLI 在执行前会写入 transcript 并按照限制截断 `stdout`。
 3. Agent 返回 `final` 后会话结束；若进程退出但未显式 `final`，CLI 也会优雅收尾。
 
-会话的完整轨迹会落在 `./artifacts/<session_id>/transcript.jsonl` 中，格式化记录每一次消息、工具调用的入参快照、执行耗时、截断信息及哈希摘要。若 `final` 消息内含 `artifacts[]`，CLI 会在同一目录写入对应文件并在 transcript 中登记路径。你也可以通过 `agent tools --json` 获取三款沙盒工具的 JSON Schema（含参数类型、互斥约束与路径元数据），便于外部 Agent 进行契约校验。
+会话的完整轨迹会落在 `./artifacts/<session_id>/transcript.jsonl` 中，格式化记录每一次消息、工具调用的入参快照、执行耗时、截断信息及哈希摘要；`summary.txt` 会随流程更新当前结论或失败原因。若 `final` 消息内含 `artifacts[]`，CLI 会在同一目录写入对应文件并在 transcript 中登记路径。你也可以通过 `agent tools --json` 获取三款沙盒工具的 JSON Schema（含参数类型、互斥约束与路径元数据），便于外部 Agent 进行契约校验。
 
-当 Agent 正在执行时，提示符前会亮起黄色 `[A]` 指示器；当会话结束且产生结果时，它会变为红色 `[A]`，提示可以回顾输出或查看监控日志。运行 `agent monitor [session_id]` 可实时跟踪最新或指定会话的 transcript（不带参数时使用最近一场会话），监控过程中按下 `q` 即可退出。
+当 Agent 正在后台执行时，提示符前会亮起黄色 `[A]` 指示器；会话自然结束或失败后，它会变为红色 `[A]`，提示可以回顾 `summary.txt` 或进入监控模式。运行 `agent monitor [session_id]` 可实时跟踪最新或指定会话的 transcript（不带参数时使用最近一场会话），监控过程中按下 `q` 即可退出。
 
 ## 在配置文件中接入外部接口
 
