@@ -718,10 +718,36 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
     std::cout << summarize_transcript_entry(raw) << std::endl;
   };
   std::string line;
-  while(std::getline(stream, line)){
-    emit(line);
+  std::streampos lastPos = stream.tellg();
+  if(lastPos == std::streampos(-1)){
+    lastPos = std::streampos(0);
   }
-  stream.clear();
+  auto drain_new_entries = [&](){
+    stream.clear();
+    stream.seekg(lastPos);
+    if(!stream.good()){
+      stream.clear();
+      stream.seekg(0, std::ios::beg);
+      auto resetPos = stream.tellg();
+      if(resetPos == std::streampos(-1)){
+        resetPos = std::streampos(0);
+      }
+      lastPos = resetPos;
+    }
+    while(std::getline(stream, line)){
+      emit(line);
+      auto pos = stream.tellg();
+      if(pos == std::streampos(-1)){
+        lastPos = std::streampos(0);
+      }else{
+        lastPos = pos;
+      }
+    }
+    if(stream.bad()){
+      stream.clear();
+    }
+  };
+  drain_new_entries();
   bool running = true;
   while(running){
     fd_set readfds;
@@ -744,12 +770,7 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
       running = false;
       break;
     }
-    while(std::getline(stream, line)){
-      emit(line);
-    }
-    if(stream.eof()){
-      stream.clear();
-    }
+    drain_new_entries();
   }
   std::cout << "[agent] monitor stopped" << std::endl;
   return result;
