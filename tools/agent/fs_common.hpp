@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tool_common.hpp"
-#include "../utils/json.hpp"
+#include "../tool_common.hpp"
+#include "../../utils/json.hpp"
 
 #include <algorithm>
 #include <chrono>

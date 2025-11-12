@@ -1,11 +1,11 @@
 #pragma once
 
-#include "tool_common.hpp"
+#include "../tool_common.hpp"
 #include "fs_common.hpp"
 #include "fs_read.hpp"
 #include "fs_write.hpp"
 #include "fs_tree.hpp"
-#include "../utils/json.hpp"
+#include "../../utils/json.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -350,7 +350,7 @@ struct AgentSession {
 
 #ifndef _WIN32
   bool start(){
-    process = spawn_agent_process("python3", {"tools/agent.py"});
+    process = spawn_agent_process("python3", {"tools/agent/agent.py"});
     if(!process.in || !process.out){
       return false;
     }

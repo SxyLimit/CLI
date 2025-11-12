@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tool_common.hpp"
+#include "../tool_common.hpp"
 #include "fs_common.hpp"
 
 #include <filesystem>

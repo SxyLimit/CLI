@@ -19,13 +19,13 @@
 #include "tools/cd.hpp"
 #include "tools/ls.hpp"
 #include "tools/cat.hpp"
-#include "tools/fs_read.hpp"
-#include "tools/fs_write.hpp"
-#include "tools/fs_tree.hpp"
+#include "tools/agent/fs_read.hpp"
+#include "tools/agent/fs_write.hpp"
+#include "tools/agent/fs_tree.hpp"
 #include "tools/mv.hpp"
 #include "tools/rm.hpp"
 #include "tools/p.hpp"
-#include "tools/agent.hpp"
+#include "tools/agent/agent.hpp"
 
 inline std::vector<std::string> render_mycli_ascii_art() {
   return {

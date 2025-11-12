@@ -126,7 +126,7 @@ HOME_PATH=settings
 
 ## Agent 协作流程
 
-`agent run <goal…>` 会启动 `tools/agent.py`（默认通过 `python3` 调用），并按照行分隔 JSON 协议与 Python 端建立会话：
+`agent run <goal…>` 会启动 `tools/agent/agent.py`（默认通过 `python3` 调用），并按照行分隔 JSON 协议与 Python 端建立会话：
 
 1. CLI 发送 `hello`（包含工具目录、调用限制与沙盒策略）与 `start`（目标描述、当前工作目录）。
 2. Python Agent 可多次返回 `tool_call` 请求调用 `fs.read` / `fs.write` / `fs.tree`，CLI 在执行前会写入 transcript 并按照限制截断 `stdout`。
