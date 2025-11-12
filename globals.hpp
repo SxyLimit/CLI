@@ -17,6 +17,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <filesystem>
 
 // ===== ANSI =====
 namespace ansi {
@@ -107,6 +108,8 @@ struct ToolSpec {
   std::vector<PositionalArgSpec> positional;           // command-level positional
   std::vector<SubcommandSpec> subs;                    // subcommands
   std::function<void(const std::vector<std::string>&)> handler;
+  bool hidden = false;
+  bool requiresExplicitExpose = false;
 };
 
 struct ToolExecutionRequest {
@@ -119,6 +122,8 @@ struct ToolExecutionResult {
   int exitCode = 0;
   std::string output;
   std::optional<std::string> display;
+  std::optional<std::string> metaJson;
+  std::optional<std::string> stderrOutput;
 
   bool succeeded() const { return exitCode == 0; }
   std::string viewForCli() const { return display.has_value() ? *display : output; }
@@ -167,6 +172,8 @@ struct StatusProvider {
   std::function<std::string()> render; // 纯文本（样式由 main 添加）
 };
 
+bool tool_visible_in_ui(const ToolSpec& spec);
+
 struct ToolRegistry {
   std::map<std::string, ToolDefinition> tools;
   std::vector<StatusProvider> statusProviders;
@@ -180,7 +187,10 @@ struct ToolRegistry {
   }
   std::vector<std::string> listNames() const {
     std::vector<std::string> r; r.reserve(tools.size());
-    for (auto &kv : tools) r.push_back(kv.first);
+    for (auto &kv : tools){
+      if(!tool_visible_in_ui(kv.second.ui)) continue;
+      r.push_back(kv.first);
+    }
     std::sort(r.begin(), r.end()); return r;
   }
   void registerStatusProvider(const StatusProvider& sp){ statusProviders.push_back(sp); }
@@ -210,6 +220,12 @@ std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& sub,
 void register_all_tools();
 void register_status_providers();
 void register_tools_from_config(const std::string& path);
+bool tool_accessible_to_user(const ToolSpec& spec, bool forLLM);
+bool agent_tools_exposed();
+void agent_indicator_set_running();
+void agent_indicator_set_finished();
+void agent_indicator_mark_acknowledged();
+void agent_indicator_clear();
 
 // ===== Settings support =====
 enum class MatchMode { Prefix, Subsequence };
@@ -235,6 +251,7 @@ struct AppSettings {
   int  promptInputEllipsisRightWidth = 50;
   int  historyRecentLimit = 10;
   std::string configHome;
+  bool agentExposeFsTools = false;
 };
 
 extern AppSettings g_settings;
@@ -270,6 +287,7 @@ void set_tool_help_locale(ToolSpec& spec, const std::string& lang, const std::st
 const std::string& settings_file_path();
 const std::string& config_home();
 bool set_config_home(const std::string& path, std::string& error);
+std::filesystem::path cli_root_directory();
 
 // ===== Message watcher =====
 struct MessageFileInfo {
