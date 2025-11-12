@@ -6,6 +6,9 @@
 #include <termios.h>
 #include <unistd.h>
 #include <poll.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #endif
 #include <cerrno>
 #include <csignal>
@@ -274,25 +277,48 @@ bool tool_accessible_to_user(const ToolSpec& spec, bool forLLM){
   return true;
 }
 
-static std::filesystem::path find_env_file_from(const std::filesystem::path& base){
-  std::error_code ec;
-  std::filesystem::path current = base;
-  if(current.empty()) return {};
-  current = std::filesystem::absolute(current, ec);
-  if(ec) return {};
-  while(true){
-    std::filesystem::path candidate = current / ".env";
-    std::ifstream probe(candidate);
-    if(probe.good()){
-      std::error_code absEc;
-      auto absolutePath = std::filesystem::absolute(candidate, absEc);
-      return absEc ? candidate : absolutePath;
-    }
-    auto parent = current.parent_path();
-    if(parent.empty() || parent == current) break;
-    current = parent;
+static std::filesystem::path executable_directory(){
+  static bool initialized = false;
+  static std::filesystem::path cached;
+  if(initialized) return cached;
+  initialized = true;
+
+#ifdef _WIN32
+  char buffer[MAX_PATH];
+  DWORD length = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+  if(length > 0){
+    std::filesystem::path exePath(buffer, buffer + length);
+    std::error_code ec;
+    auto canonical = std::filesystem::canonical(exePath, ec);
+    cached = ec ? exePath.parent_path() : canonical.parent_path();
   }
-  return {};
+#elif defined(__APPLE__)
+  uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  if(size > 0){
+    std::vector<char> pathBuf(size + 1u, '\0');
+    if(_NSGetExecutablePath(pathBuf.data(), &size) == 0){
+      std::filesystem::path exePath(pathBuf.data());
+      std::error_code ec;
+      auto canonical = std::filesystem::canonical(exePath, ec);
+      cached = ec ? exePath.parent_path() : canonical.parent_path();
+    }
+  }
+#else
+  std::vector<char> pathBuf(4096);
+  ssize_t length = ::readlink("/proc/self/exe", pathBuf.data(), pathBuf.size() - 1);
+  if(length > 0){
+    pathBuf[static_cast<size_t>(length)] = '\0';
+    std::filesystem::path exePath(std::string(pathBuf.data(), static_cast<size_t>(length)));
+    std::error_code ec;
+    auto canonical = std::filesystem::canonical(exePath, ec);
+    cached = ec ? exePath.parent_path() : canonical.parent_path();
+  }
+#endif
+  if(!cached.empty()){
+    cached = cached.lexically_normal();
+  }
+  return cached;
 }
 
 static std::filesystem::path resolve_env_file_path(){
@@ -301,40 +327,18 @@ static std::filesystem::path resolve_env_file_path(){
   if(initialized) return cached;
   initialized = true;
 
-  std::error_code ec;
-  auto cwd = std::filesystem::current_path(ec);
-  if(!ec){
-    cached = find_env_file_from(cwd);
-  }
-#ifdef _WIN32
-  if(cached.empty()){
-    char buffer[MAX_PATH];
-    DWORD length = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
-    if(length > 0){
-      std::filesystem::path exeDir(buffer);
-      exeDir = exeDir.parent_path();
-      cached = find_env_file_from(exeDir);
-    }
-  }
-#else
-  if(cached.empty()){
-    std::vector<char> buffer(4096);
-    ssize_t length = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
-    if(length > 0){
-      buffer[static_cast<size_t>(length)] = '\0';
-      std::filesystem::path exeDir(std::string(buffer.data(), static_cast<size_t>(length)));
-      exeDir = exeDir.parent_path();
-      cached = find_env_file_from(exeDir);
-    }
-  }
-#endif
-
-  if(cached.empty()){
+  std::filesystem::path base = executable_directory();
+  if(base.empty()){
     std::error_code absEc;
-    auto absolutePath = std::filesystem::absolute(std::filesystem::path(".env"), absEc);
-    cached = absEc ? std::filesystem::path(".env") : absolutePath;
+    cached = std::filesystem::absolute(std::filesystem::path(".env"), absEc);
+    if(absEc) cached = std::filesystem::path(".env");
+    return cached;
   }
 
+  std::filesystem::path candidate = base / ".env";
+  std::error_code absEc;
+  auto absolutePath = std::filesystem::absolute(candidate, absEc);
+  cached = absEc ? candidate : absolutePath;
   return cached;
 }
 
