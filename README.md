@@ -1,4 +1,4 @@
-# mycli
+# MyCLI
 
 一个演示用的交互式 CLI，展示了命令补全、路径类型约束、状态提示，以及与外部工具和大模型通信等功能。
 
@@ -44,7 +44,7 @@ HOME_PATH=settings
 | `run` | `run <command> [args…]` | 逐项转义后执行任意系统命令。 |
 | `llm` | `llm call <消息…>`<br>`llm recall` | 通过 Python 助手异步调用 Moonshot/Kimi 接口并查看最近一次回复。 |
 | `message` | `message list`<br>`message last`<br>`message detail <文件>` | 监听 Markdown 通知目录，列出未读文件、查看最近修改的文件，或按文件名读取具体内容。 |
-| `cd` | `cd <路径>`<br>`cd -o [-a|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 隐藏路径、`-c` 显示完整路径，默认省略父目录）。 |
+| `cd` | `cd <路径> ` 或 `cd -o [-a|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 隐藏路径、`-c` 显示完整路径，默认省略父目录）。 |
 | `ls` | `ls [-a] [-l] [目录]` | 简化版目录列表，支持展示隐藏文件与长列表模式。 |
 | `cat` | `cat <file> [file2 …] [--pipe <command>]` | 输出一个或多个文件内容（总计 ≤1MB）；也可将内容通过管道写入外部命令。 |
 | `mv` | `mv <source> <target>` | 移动或重命名文件/目录。 |
