@@ -274,6 +274,70 @@ bool tool_accessible_to_user(const ToolSpec& spec, bool forLLM){
   return true;
 }
 
+static std::filesystem::path find_env_file_from(const std::filesystem::path& base){
+  std::error_code ec;
+  std::filesystem::path current = base;
+  if(current.empty()) return {};
+  current = std::filesystem::absolute(current, ec);
+  if(ec) return {};
+  while(true){
+    std::filesystem::path candidate = current / ".env";
+    std::ifstream probe(candidate);
+    if(probe.good()){
+      std::error_code absEc;
+      auto absolutePath = std::filesystem::absolute(candidate, absEc);
+      return absEc ? candidate : absolutePath;
+    }
+    auto parent = current.parent_path();
+    if(parent.empty() || parent == current) break;
+    current = parent;
+  }
+  return {};
+}
+
+static std::filesystem::path resolve_env_file_path(){
+  static bool initialized = false;
+  static std::filesystem::path cached;
+  if(initialized) return cached;
+  initialized = true;
+
+  std::error_code ec;
+  auto cwd = std::filesystem::current_path(ec);
+  if(!ec){
+    cached = find_env_file_from(cwd);
+  }
+#ifdef _WIN32
+  if(cached.empty()){
+    char buffer[MAX_PATH];
+    DWORD length = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+    if(length > 0){
+      std::filesystem::path exeDir(buffer);
+      exeDir = exeDir.parent_path();
+      cached = find_env_file_from(exeDir);
+    }
+  }
+#else
+  if(cached.empty()){
+    std::vector<char> buffer(4096);
+    ssize_t length = ::readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
+    if(length > 0){
+      buffer[static_cast<size_t>(length)] = '\0';
+      std::filesystem::path exeDir(std::string(buffer.data(), static_cast<size_t>(length)));
+      exeDir = exeDir.parent_path();
+      cached = find_env_file_from(exeDir);
+    }
+  }
+#endif
+
+  if(cached.empty()){
+    std::error_code absEc;
+    auto absolutePath = std::filesystem::absolute(std::filesystem::path(".env"), absEc);
+    cached = absEc ? std::filesystem::path(".env") : absolutePath;
+  }
+
+  return cached;
+}
+
 void agent_indicator_clear(){
   g_agent_running_sessions.store(0, std::memory_order_relaxed);
   g_agent_pending_sessions.store(0, std::memory_order_relaxed);
@@ -300,7 +364,8 @@ static void load_env_overrides(){
   static bool loaded = false;
   if(loaded) return;
   loaded = true;
-  std::ifstream in(".env");
+  const std::filesystem::path envPath = resolve_env_file_path();
+  std::ifstream in(envPath);
   if(!in.good()) return;
   std::string line;
   while(std::getline(in, line)){
@@ -739,7 +804,8 @@ void llm_set_pending(bool pending){
 }
 
 static void persist_home_path_to_env(const std::string& path){
-  std::ifstream in(".env");
+  const std::filesystem::path envPath = resolve_env_file_path();
+  std::ifstream in(envPath);
   std::vector<std::string> lines;
   bool found = false;
   if(in.good()){
@@ -763,7 +829,12 @@ static void persist_home_path_to_env(const std::string& path){
   if(!found){
     lines.push_back(std::string("HOME_PATH=") + path);
   }
-  std::ofstream out(".env", std::ios::trunc);
+  std::error_code ec;
+  auto parent = envPath.parent_path();
+  if(!parent.empty()){
+    std::filesystem::create_directories(parent, ec);
+  }
+  std::ofstream out(envPath, std::ios::trunc);
   if(!out.good()) return;
   for(size_t i=0;i<lines.size();++i){
     out << lines[i] << "\n";
