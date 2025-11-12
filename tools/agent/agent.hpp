@@ -589,6 +589,66 @@ inline std::string truncate_summary(const std::string& text, size_t limit){
   return text.substr(0, limit - 3) + "...";
 }
 
+struct AgentSessionCompletionEntry {
+  std::string sessionId;
+  std::string summary;
+  std::filesystem::file_time_type updatedAt;
+};
+
+inline std::vector<AgentSessionCompletionEntry> agent_session_completion_entries(){
+  std::vector<AgentSessionCompletionEntry> entries;
+  std::filesystem::path root = std::filesystem::current_path() / "artifacts";
+  std::error_code ec;
+  if(!std::filesystem::exists(root, ec) || !std::filesystem::is_directory(root, ec)){
+    return entries;
+  }
+  std::filesystem::directory_iterator it(root, ec);
+  std::filesystem::directory_iterator end;
+  if(ec) return entries;
+  for(; it != end; it.increment(ec)){
+    if(ec){
+      ec.clear();
+      continue;
+    }
+    const auto& entry = *it;
+    if(!entry.is_directory(ec)){
+      ec.clear();
+      continue;
+    }
+    std::filesystem::path dir = entry.path();
+    std::filesystem::path transcript = dir / "transcript.jsonl";
+    if(!std::filesystem::exists(transcript, ec) || !std::filesystem::is_regular_file(transcript, ec)){
+      ec.clear();
+      continue;
+    }
+    AgentSessionCompletionEntry info;
+    info.sessionId = dir.filename().string();
+    info.updatedAt = std::filesystem::file_time_type::min();
+    auto stamp = std::filesystem::last_write_time(transcript, ec);
+    if(!ec){
+      info.updatedAt = stamp;
+    }else{
+      ec.clear();
+    }
+    std::filesystem::path summaryPath = dir / "summary.txt";
+    std::ifstream summary(summaryPath);
+    if(summary.good()){
+      std::string line;
+      std::getline(summary, line);
+      while(!line.empty() && (line.back() == '\r' || line.back() == '\n')){
+        line.pop_back();
+      }
+      info.summary = truncate_summary(line, 80);
+    }
+    entries.push_back(std::move(info));
+  }
+  std::sort(entries.begin(), entries.end(), [](const AgentSessionCompletionEntry& a, const AgentSessionCompletionEntry& b){
+    if(a.updatedAt != b.updatedAt) return a.updatedAt > b.updatedAt;
+    return a.sessionId > b.sessionId;
+  });
+  return entries;
+}
+
 inline std::string summarize_transcript_payload(const std::string& eventKind, const sj::Value& data){
   if(!data.isObject()) return sj::dump(data);
   const auto& obj = data.asObject();
@@ -713,6 +773,9 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
     result.display = result.output;
     return result;
   }
+  struct MonitorAckGuard {
+    ~MonitorAckGuard(){ agent_indicator_mark_acknowledged(); }
+  } ackGuard;
   std::cout << "[agent] monitoring session " << sessionId << " (press q to quit)" << std::endl;
   auto emit = [&](const std::string& raw){
     std::cout << summarize_transcript_entry(raw) << std::endl;
@@ -1064,6 +1127,7 @@ struct AgentTool {
       std::thread([session, goal]{ agent_session_thread_main(session, goal); }).detach();
     }catch(const std::system_error& ex){
       agent_indicator_set_finished();
+      agent_indicator_mark_acknowledged();
       session->update_summary(std::string("Agent dispatch failed: ") + ex.what());
       session->record_event("summary", sj::make_object({{"text", sj::Value(std::string("Agent dispatch failed: ") + ex.what())}}));
       session->record_event("error", sj::make_object({{"message", sj::Value(std::string("thread dispatch failed: ") + ex.what())}}));

@@ -223,6 +223,7 @@ bool tool_accessible_to_user(const ToolSpec& spec, bool forLLM);
 bool agent_tools_exposed();
 void agent_indicator_set_running();
 void agent_indicator_set_finished();
+void agent_indicator_mark_acknowledged();
 void agent_indicator_clear();
 
 // ===== Settings support =====

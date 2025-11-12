@@ -32,6 +32,7 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <atomic>
 
 #include "globals.hpp"
 #include "tools.hpp"
@@ -201,6 +202,36 @@ static std::string trim_copy(const std::string& s){
 }
 
 static std::vector<std::string> g_command_history;
+static std::atomic<int> g_agent_running_sessions{0};
+static std::atomic<int> g_agent_pending_sessions{0};
+
+static void agent_indicator_refresh_state(){
+  PromptIndicatorState state = prompt_indicator_current("agent");
+  state.text = "A";
+  state.bracketColor = ansi::WHITE;
+  int running = g_agent_running_sessions.load(std::memory_order_relaxed);
+  int pending = g_agent_pending_sessions.load(std::memory_order_relaxed);
+  if(running > 0){
+    state.visible = true;
+    state.textColor = ansi::YELLOW;
+  }else if(pending > 0){
+    state.visible = true;
+    state.textColor = ansi::RED;
+  }else{
+    state.visible = false;
+    state.textColor = ansi::WHITE;
+  }
+  update_prompt_indicator("agent", state);
+}
+
+static void agent_indicator_decrement(std::atomic<int>& counter){
+  int current = counter.load(std::memory_order_relaxed);
+  while(current > 0){
+    if(counter.compare_exchange_weak(current, current - 1, std::memory_order_relaxed)){
+      break;
+    }
+  }
+}
 
 void history_apply_limit(){
   int limit = g_settings.historyRecentLimit;
@@ -244,30 +275,25 @@ bool tool_accessible_to_user(const ToolSpec& spec, bool forLLM){
 }
 
 void agent_indicator_clear(){
-  PromptIndicatorState state = prompt_indicator_current("agent");
-  state.visible = false;
-  state.text = "A";
-  state.textColor = ansi::WHITE;
-  state.bracketColor = ansi::WHITE;
-  update_prompt_indicator("agent", state);
+  g_agent_running_sessions.store(0, std::memory_order_relaxed);
+  g_agent_pending_sessions.store(0, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
 }
 
 void agent_indicator_set_running(){
-  PromptIndicatorState state = prompt_indicator_current("agent");
-  state.visible = true;
-  state.text = "A";
-  state.textColor = ansi::YELLOW;
-  state.bracketColor = ansi::WHITE;
-  update_prompt_indicator("agent", state);
+  g_agent_running_sessions.fetch_add(1, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
 }
 
 void agent_indicator_set_finished(){
-  PromptIndicatorState state = prompt_indicator_current("agent");
-  state.visible = true;
-  state.text = "A";
-  state.textColor = ansi::RED;
-  state.bracketColor = ansi::WHITE;
-  update_prompt_indicator("agent", state);
+  agent_indicator_decrement(g_agent_running_sessions);
+  g_agent_pending_sessions.fetch_add(1, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
+}
+
+void agent_indicator_mark_acknowledged(){
+  agent_indicator_decrement(g_agent_pending_sessions);
+  agent_indicator_refresh_state();
 }
 
 static void load_env_overrides(){
@@ -2095,6 +2121,40 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
         }
         if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
       }
+    }
+  }
+
+  if(spec.name == "agent" && sub && sub->name=="monitor"){
+    bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
+    bool expectingArgument = false;
+    if(trailingSpace){
+      expectingArgument = (toks.size() == 2);
+    }else if(toks.size() >= 3 && toks.back() == sw.word){
+      expectingArgument = true;
+    }
+    if(expectingArgument){
+      std::string query = sw.word;
+      auto sessions = tool::agent_session_completion_entries();
+      std::string latestId;
+      if(auto latest = tool::load_latest_agent_session_marker(); latest){
+        latestId = latest->first;
+      }
+      for(const auto& entry : sessions){
+        MatchResult match = compute_match(entry.sessionId, query);
+        if(!match.matched) continue;
+        std::string annotation = entry.summary;
+        if(entry.sessionId == latestId){
+          if(!annotation.empty()) annotation += " · ";
+          annotation += "latest";
+        }
+        out.items.push_back(sw.before + entry.sessionId);
+        out.labels.push_back(entry.sessionId);
+        out.matchPositions.push_back(match.positions);
+        out.annotations.push_back(annotation);
+        out.exactMatches.push_back(match.exact);
+        out.matchDetails.push_back(match);
+      }
+      return finalizeCandidates(query, std::move(out));
     }
   }
 
