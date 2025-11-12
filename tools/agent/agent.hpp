@@ -372,7 +372,11 @@ struct AgentSession {
 
 #ifndef _WIN32
   bool start(){
-    process = spawn_agent_process("python3", {"tools/agent/agent.py"});
+    std::filesystem::path scriptPath = cli_root_directory() / "tools" / "agent" / "agent.py";
+    if(!std::filesystem::exists(scriptPath)){
+      scriptPath = std::filesystem::path("tools") / "agent" / "agent.py";
+    }
+    process = spawn_agent_process("python3", {scriptPath.string()});
     if(!process.in || !process.out){
       return false;
     }

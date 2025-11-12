@@ -17,6 +17,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <filesystem>
 
 // ===== ANSI =====
 namespace ansi {
@@ -286,6 +287,7 @@ void set_tool_help_locale(ToolSpec& spec, const std::string& lang, const std::st
 const std::string& settings_file_path();
 const std::string& config_home();
 bool set_config_home(const std::string& path, std::string& error);
+std::filesystem::path cli_root_directory();
 
 // ===== Message watcher =====
 struct MessageFileInfo {

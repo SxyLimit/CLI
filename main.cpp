@@ -321,20 +321,27 @@ static std::filesystem::path executable_directory(){
   return cached;
 }
 
+std::filesystem::path cli_root_directory(){
+  std::filesystem::path base = executable_directory();
+  if(!base.empty()){
+    return base;
+  }
+
+  std::error_code ec;
+  auto cwd = std::filesystem::current_path(ec);
+  if(!ec){
+    return cwd.lexically_normal();
+  }
+  return {};
+}
+
 static std::filesystem::path resolve_env_file_path(){
   static bool initialized = false;
   static std::filesystem::path cached;
   if(initialized) return cached;
   initialized = true;
 
-  std::filesystem::path base = executable_directory();
-  if(base.empty()){
-    std::error_code absEc;
-    cached = std::filesystem::absolute(std::filesystem::path(".env"), absEc);
-    if(absEc) cached = std::filesystem::path(".env");
-    return cached;
-  }
-
+  std::filesystem::path base = cli_root_directory();
   std::filesystem::path candidate = base / ".env";
   std::error_code absEc;
   auto absolutePath = std::filesystem::absolute(candidate, absEc);
