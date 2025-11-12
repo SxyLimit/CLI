@@ -24,6 +24,7 @@
 #include <cstring>
 #include <iostream>
 #include <cerrno>
+#include <cctype>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -649,6 +650,80 @@ inline std::vector<AgentSessionCompletionEntry> agent_session_completion_entries
   return entries;
 }
 
+struct AgentCompletion {
+  static Candidates complete(const std::string& buffer, const std::vector<std::string>& tokens){
+    Candidates cand;
+    if(tokens.empty() || tokens[0] != "agent") return cand;
+
+    auto sw = splitLastWord(buffer);
+    bool trailingSpace = (!buffer.empty() && std::isspace(static_cast<unsigned char>(buffer.back())));
+    static const std::vector<std::string> subs{"run", "tools", "monitor"};
+
+    auto addSubcommand = [&](const std::string& sub){
+      cand.items.push_back(sw.before + sub);
+      cand.labels.push_back(sub);
+      cand.matchPositions.push_back({});
+      cand.annotations.push_back("");
+      cand.exactMatches.push_back(false);
+      cand.matchDetails.push_back({});
+    };
+
+    if(tokens.size() == 1){
+      if(!trailingSpace) return cand;
+      for(const auto& sub : subs){
+        addSubcommand(sub);
+      }
+      return cand;
+    }
+
+    if(tokens.size() == 2 && !trailingSpace){
+      for(const auto& sub : subs){
+        MatchResult match = compute_match(sub, sw.word);
+        if(!match.matched) continue;
+        cand.items.push_back(sw.before + sub);
+        cand.labels.push_back(sub);
+        cand.matchPositions.push_back(match.positions);
+        cand.annotations.push_back("");
+        cand.exactMatches.push_back(match.exact);
+        cand.matchDetails.push_back(match);
+      }
+      sortCandidatesByMatch(sw.word, cand);
+      return cand;
+    }
+
+    if(tokens.size() >= 2 && tokens[1] == "monitor"){
+      if(tokens.size() > 3) return cand;
+      if(tokens.size() == 3 && trailingSpace) return cand;
+      std::string query = sw.word;
+      if(tokens.size() == 2 && trailingSpace) query.clear();
+      auto entries = agent_session_completion_entries();
+      for(const auto& entry : entries){
+        if(query.empty()){
+          cand.items.push_back(sw.before + entry.sessionId);
+          cand.labels.push_back(entry.sessionId);
+          cand.matchPositions.push_back({});
+          cand.annotations.push_back(entry.summary);
+          cand.exactMatches.push_back(false);
+          cand.matchDetails.push_back({});
+          continue;
+        }
+        MatchResult match = compute_match(entry.sessionId, query);
+        if(!match.matched) continue;
+        cand.items.push_back(sw.before + entry.sessionId);
+        cand.labels.push_back(entry.sessionId);
+        cand.matchPositions.push_back(match.positions);
+        cand.annotations.push_back(entry.summary);
+        cand.exactMatches.push_back(match.exact);
+        cand.matchDetails.push_back(match);
+      }
+      if(!query.empty()) sortCandidatesByMatch(query, cand);
+      return cand;
+    }
+
+    return cand;
+  }
+};
+
 inline std::string summarize_transcript_payload(const std::string& eventKind, const sj::Value& data){
   if(!data.isObject()) return sj::dump(data);
   const auto& obj = data.asObject();
@@ -765,6 +840,10 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
                                                  const std::filesystem::path& transcriptPath){
 #ifndef _WIN32
   ToolExecutionResult result;
+  struct MonitorAckGuard {
+    bool active = true;
+    ~MonitorAckGuard(){ if(active) agent_indicator_mark_acknowledged(); }
+  } ackGuard;
   std::ifstream stream(transcriptPath);
   if(!stream.good()){
     g_parse_error_cmd = "agent";
@@ -773,9 +852,6 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
     result.display = result.output;
     return result;
   }
-  struct MonitorAckGuard {
-    ~MonitorAckGuard(){ agent_indicator_mark_acknowledged(); }
-  } ackGuard;
   std::cout << "[agent] monitoring session " << sessionId << " (press q to quit)" << std::endl;
   auto emit = [&](const std::string& raw){
     std::cout << summarize_transcript_entry(raw) << std::endl;
@@ -1161,6 +1237,7 @@ inline ToolDefinition make_agent_tool(){
   ToolDefinition def;
   def.ui = AgentTool::ui();
   def.executor = AgentTool::run;
+  def.completion = AgentCompletion::complete;
   return def;
 }
 
