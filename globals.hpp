@@ -171,6 +171,8 @@ struct StatusProvider {
   std::function<std::string()> render; // 纯文本（样式由 main 添加）
 };
 
+bool tool_visible_in_ui(const ToolSpec& spec);
+
 struct ToolRegistry {
   std::map<std::string, ToolDefinition> tools;
   std::vector<StatusProvider> statusProviders;
@@ -217,7 +219,6 @@ std::string renderSubGhost(const ToolSpec& parent, const SubcommandSpec& sub,
 void register_all_tools();
 void register_status_providers();
 void register_tools_from_config(const std::string& path);
-bool tool_visible_in_ui(const ToolSpec& spec);
 bool tool_accessible_to_user(const ToolSpec& spec, bool forLLM);
 bool agent_tools_exposed();
 void agent_indicator_set_running();

@@ -598,11 +598,11 @@ inline std::string summarize_transcript_entry(const std::string& raw){
     if(!value.isObject()) return raw;
     const auto& obj = value.asObject();
     std::string ts;
-    if(const auto* tsField = obj.find("ts"); tsField) ts = tsField->second.asString();
+    if(auto it = obj.find("ts"); it != obj.end()) ts = it->second.asString();
     std::string eventKind;
-    if(const auto* eventField = obj.find("event"); eventField) eventKind = eventField->second.asString();
+    if(auto it = obj.find("event"); it != obj.end()) eventKind = it->second.asString();
     std::string detail;
-    if(const auto* dataField = obj.find("data")) detail = summarize_transcript_payload(eventKind, *dataField);
+    if(auto it = obj.find("data"); it != obj.end()) detail = summarize_transcript_payload(eventKind, it->second);
     if(detail.empty() && !eventKind.empty()) detail = eventKind;
     std::string prefix;
     if(eventKind == "send") prefix = "->";
