@@ -6,6 +6,9 @@
 #include <termios.h>
 #include <unistd.h>
 #include <poll.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #endif
 #include <cerrno>
 #include <csignal>
@@ -32,6 +35,7 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <atomic>
 
 #include "globals.hpp"
 #include "tools.hpp"
@@ -201,6 +205,44 @@ static std::string trim_copy(const std::string& s){
 }
 
 static std::vector<std::string> g_command_history;
+static std::atomic<int> g_agent_running_sessions{0};
+static std::atomic<int> g_agent_pending_sessions{0};
+static std::atomic<int> g_agent_guard_alerts{0};
+static std::atomic<bool> g_agent_monitor_active{false};
+
+static void agent_indicator_refresh_state(){
+  PromptIndicatorState state = prompt_indicator_current("agent");
+  state.text = "A";
+  state.bracketColor = ansi::WHITE;
+  int guardAlerts = g_agent_guard_alerts.load(std::memory_order_relaxed);
+  bool monitorActive = g_agent_monitor_active.load(std::memory_order_relaxed);
+  int running = g_agent_running_sessions.load(std::memory_order_relaxed);
+  int pending = g_agent_pending_sessions.load(std::memory_order_relaxed);
+  if(guardAlerts > 0){
+    state.visible = true;
+    state.textColor = monitorActive ? std::string(ansi::YELLOW)
+                                    : std::string(ansi::YELLOW) + ansi::BLINK;
+  }else if(running > 0){
+    state.visible = true;
+    state.textColor = ansi::YELLOW;
+  }else if(pending > 0){
+    state.visible = true;
+    state.textColor = ansi::RED;
+  }else{
+    state.visible = false;
+    state.textColor = ansi::WHITE;
+  }
+  update_prompt_indicator("agent", state);
+}
+
+static void agent_indicator_decrement(std::atomic<int>& counter){
+  int current = counter.load(std::memory_order_relaxed);
+  while(current > 0){
+    if(counter.compare_exchange_weak(current, current - 1, std::memory_order_relaxed)){
+      break;
+    }
+  }
+}
 
 void history_apply_limit(){
   int limit = g_settings.historyRecentLimit;
@@ -227,11 +269,139 @@ const std::vector<std::string>& history_recent_commands(){
   return g_command_history;
 }
 
+bool agent_tools_exposed(){
+  return g_settings.agentExposeFsTools;
+}
+
+bool tool_visible_in_ui(const ToolSpec& spec){
+  if(spec.requiresExplicitExpose && !agent_tools_exposed()) return false;
+  if(spec.hidden && !agent_tools_exposed()) return false;
+  return true;
+}
+
+bool tool_accessible_to_user(const ToolSpec& spec, bool forLLM){
+  if(forLLM) return true;
+  if(spec.requiresExplicitExpose && !agent_tools_exposed()) return false;
+  return true;
+}
+
+static std::filesystem::path executable_directory(){
+  static bool initialized = false;
+  static std::filesystem::path cached;
+  if(initialized) return cached;
+  initialized = true;
+
+#ifdef _WIN32
+  char buffer[MAX_PATH];
+  DWORD length = GetModuleFileNameA(nullptr, buffer, MAX_PATH);
+  if(length > 0){
+    std::filesystem::path exePath(buffer, buffer + length);
+    std::error_code ec;
+    auto canonical = std::filesystem::canonical(exePath, ec);
+    cached = ec ? exePath.parent_path() : canonical.parent_path();
+  }
+#elif defined(__APPLE__)
+  uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  if(size > 0){
+    std::vector<char> pathBuf(size + 1u, '\0');
+    if(_NSGetExecutablePath(pathBuf.data(), &size) == 0){
+      std::filesystem::path exePath(pathBuf.data());
+      std::error_code ec;
+      auto canonical = std::filesystem::canonical(exePath, ec);
+      cached = ec ? exePath.parent_path() : canonical.parent_path();
+    }
+  }
+#else
+  std::vector<char> pathBuf(4096);
+  ssize_t length = ::readlink("/proc/self/exe", pathBuf.data(), pathBuf.size() - 1);
+  if(length > 0){
+    pathBuf[static_cast<size_t>(length)] = '\0';
+    std::filesystem::path exePath(std::string(pathBuf.data(), static_cast<size_t>(length)));
+    std::error_code ec;
+    auto canonical = std::filesystem::canonical(exePath, ec);
+    cached = ec ? exePath.parent_path() : canonical.parent_path();
+  }
+#endif
+  if(!cached.empty()){
+    cached = cached.lexically_normal();
+  }
+  return cached;
+}
+
+std::filesystem::path cli_root_directory(){
+  std::filesystem::path base = executable_directory();
+  if(!base.empty()){
+    return base;
+  }
+
+  std::error_code ec;
+  auto cwd = std::filesystem::current_path(ec);
+  if(!ec){
+    return cwd.lexically_normal();
+  }
+  return {};
+}
+
+static std::filesystem::path resolve_env_file_path(){
+  static bool initialized = false;
+  static std::filesystem::path cached;
+  if(initialized) return cached;
+  initialized = true;
+
+  std::filesystem::path base = cli_root_directory();
+  std::filesystem::path candidate = base / ".env";
+  std::error_code absEc;
+  auto absolutePath = std::filesystem::absolute(candidate, absEc);
+  cached = absEc ? candidate : absolutePath;
+  return cached;
+}
+
+void agent_indicator_clear(){
+  g_agent_running_sessions.store(0, std::memory_order_relaxed);
+  g_agent_pending_sessions.store(0, std::memory_order_relaxed);
+  g_agent_guard_alerts.store(0, std::memory_order_relaxed);
+  g_agent_monitor_active.store(false, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
+}
+
+void agent_indicator_set_running(){
+  g_agent_running_sessions.fetch_add(1, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
+}
+
+void agent_indicator_set_finished(){
+  agent_indicator_decrement(g_agent_running_sessions);
+  g_agent_pending_sessions.fetch_add(1, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
+}
+
+void agent_indicator_mark_acknowledged(){
+  agent_indicator_decrement(g_agent_pending_sessions);
+  agent_indicator_refresh_state();
+}
+
+void agent_indicator_guard_alert_inc(){
+  g_agent_guard_alerts.fetch_add(1, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
+}
+
+void agent_indicator_guard_alert_dec(){
+  agent_indicator_decrement(g_agent_guard_alerts);
+  agent_indicator_refresh_state();
+}
+
+void agent_monitor_set_active(bool active){
+  g_agent_monitor_active.store(active, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
+}
+
 static void load_env_overrides(){
   static bool loaded = false;
   if(loaded) return;
   loaded = true;
-  std::ifstream in(".env");
+  const std::filesystem::path envPath = resolve_env_file_path();
+  std::ifstream in(envPath);
   if(!in.good()) return;
   std::string line;
   while(std::getline(in, line)){
@@ -670,7 +840,8 @@ void llm_set_pending(bool pending){
 }
 
 static void persist_home_path_to_env(const std::string& path){
-  std::ifstream in(".env");
+  const std::filesystem::path envPath = resolve_env_file_path();
+  std::ifstream in(envPath);
   std::vector<std::string> lines;
   bool found = false;
   if(in.good()){
@@ -694,7 +865,12 @@ static void persist_home_path_to_env(const std::string& path){
   if(!found){
     lines.push_back(std::string("HOME_PATH=") + path);
   }
-  std::ofstream out(".env", std::ios::trunc);
+  std::error_code ec;
+  auto parent = envPath.parent_path();
+  if(!parent.empty()){
+    std::filesystem::create_directories(parent, ec);
+  }
+  std::ofstream out(envPath, std::ios::trunc);
   if(!out.good()) return;
   for(size_t i=0;i<lines.size();++i){
     out << lines[i] << "\n";
@@ -2055,6 +2231,40 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
     }
   }
 
+  if(spec.name == "agent" && sub && sub->name=="monitor"){
+    bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
+    bool expectingArgument = false;
+    if(trailingSpace){
+      expectingArgument = (toks.size() == 2);
+    }else if(toks.size() >= 3 && toks.back() == sw.word){
+      expectingArgument = true;
+    }
+    if(expectingArgument){
+      std::string query = sw.word;
+      auto sessions = tool::agent_session_completion_entries();
+      std::string latestId;
+      if(auto latest = tool::load_latest_agent_session_marker(); latest){
+        latestId = latest->first;
+      }
+      for(const auto& entry : sessions){
+        MatchResult match = compute_match(entry.sessionId, query);
+        if(!match.matched) continue;
+        std::string annotation = entry.summary;
+        if(entry.sessionId == latestId){
+          if(!annotation.empty()) annotation += " · ";
+          annotation += "latest";
+        }
+        out.items.push_back(sw.before + entry.sessionId);
+        out.labels.push_back(entry.sessionId);
+        out.matchPositions.push_back(match.positions);
+        out.annotations.push_back(annotation);
+        out.exactMatches.push_back(match.exact);
+        out.matchDetails.push_back(match);
+      }
+      return finalizeCandidates(query, std::move(out));
+    }
+  }
+
   if(spec.name == "message" && sub && sub->name=="detail"){
     bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
     bool expectingArgument = false;
@@ -2607,6 +2817,11 @@ static void renderBelowThree(const std::string& status, int status_len,
 static void execToolLine(const std::string& line){
   auto toks = splitTokens(line); if(toks.empty()) return;
   const ToolDefinition* def = REG.find(toks[0]); if(!def){ std::cout<<trFmt("unknown_command", {{"name", toks[0]}})<<"\n"; return; }
+  if(!tool_accessible_to_user(def->ui, false)){
+    std::cout << "command " << toks[0] << " is reserved for the automation agent. "
+              << "Enable it with `setting set agent.fs_tools.expose true`.\n";
+    return;
+  }
   if(!def->executor){ std::cout<<"no handler\n"; return; }
   ToolExecutionRequest req;
   req.tokens = toks;
@@ -2631,6 +2846,13 @@ ToolExecutionResult invoke_registered_tool(const std::string& line, bool silent)
     res.display = res.output;
     return res;
   }
+  if(!tool_accessible_to_user(def->ui, req.forLLM)){
+    ToolExecutionResult res;
+    res.exitCode = 1;
+    res.output = "command " + req.tokens[0] + " is restricted to the automation agent.\n";
+    res.display = res.output;
+    return res;
+  }
   return def->executor(req);
 }
 static void printHelpAll(){
@@ -2650,7 +2872,9 @@ static void printHelpAll(){
 }
 static void printHelpOne(const std::string& name){
   const ToolDefinition* def = REG.find(name);
-  if(!def){ std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return; }
+  if(!def || !tool_visible_in_ui(def->ui)){
+    std::cout<<trFmt("help_no_such_command", {{"name", name}})<<"\n"; return;
+  }
   const ToolSpec& spec = def->ui;
   std::string summary = localized_tool_summary(spec);
   if(summary.empty()) std::cout<<name<<"\n";
@@ -2714,6 +2938,8 @@ int main(){
 
   register_prompt_indicator(PromptIndicatorDescriptor{"message", "M"});
   register_prompt_indicator(PromptIndicatorDescriptor{"llm", "L"});
+  register_prompt_indicator(PromptIndicatorDescriptor{"agent", "A"});
+  agent_indicator_clear();
 
   // 1) 注册内置工具与状态
   register_all_tools();

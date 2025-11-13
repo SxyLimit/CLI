@@ -20,6 +20,8 @@ LLM_TEMPERATURE=0.6
 HOME_PATH=settings
 ```
 
+无论从哪个目录启动，CLI 都会始终使用自身根目录下的 `.env` 文件，确保配置来源固定且与仓库一起分发。若根目录不存在 `.env`，可手动复制示例或自行创建，该文件同样会用于保存 `HOME_PATH` 等设置项。
+
 ## 主要特性
 
 - **命令注册与帮助**：通过 `ToolRegistry` 注册内置工具，可使用 `help` 查看命令说明。
@@ -44,9 +46,13 @@ HOME_PATH=settings
 | `run` | `run <command> [args…]` | 逐项转义后执行任意系统命令。 |
 | `llm` | `llm call <消息…>`<br>`llm recall` | 通过 Python 助手异步调用 Moonshot/Kimi 接口并查看最近一次回复。 |
 | `message` | `message list`<br>`message last`<br>`message detail <文件>` | 监听 Markdown 通知目录，列出未读文件、查看最近修改的文件，或按文件名读取具体内容。 |
-| `cd` | `cd <路径> `<br>`cd -o [-a\|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 隐藏路径、`-c` 显示完整路径，默认省略父目录）。 |
+| `cd` | `cd <路径> `<br>`cd -o [-a\|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式。 |
 | `ls` | `ls [-a] [-l] [目录]` | 简化版目录列表，支持展示隐藏文件与长列表模式。 |
-| `cat` | `cat <file> [file2 …] [--pipe <command>]` | 输出一个或多个文件内容（总计 ≤1MB）；也可将内容通过管道写入外部命令。 |
+| `fs.read` | `fs.read <path> [--max-bytes N] [--head N|--tail N] [...]` | 在沙盒内读取文本文件，支持按范围/行号采样、计算哈希值、输出行号等。默认仅供 Agent 调用，如需手动使用可先执行 `setting set agent.fs_tools.expose true`。`cat` 命令现为该工具的别名。 |
+| `fs.write` | `fs.write <path> (--content TEXT | --content-file FILE) [选项]` | 在沙盒内写入文本文件，支持覆盖/追加、换行符转换、原子化提交与备份，并提供写入前后的哈希摘要。同样默认仅对 Agent 开放，可通过 `agent.fs_tools.expose` 设置临时暴露给 CLI。 |
+| `fs.create` | `fs.create <path> [--content TEXT | --content-file FILE] [选项]` | 新建沙盒内的文本文件，支持一次性写入初始内容、自动创建父目录或原子提交，便于生成 C/C++ 等白名单后缀的源文件。默认仅供 Agent 调用。 |
+| `fs.tree` | `fs.tree <root> [--depth N] [--format json|text] [...]` | 构建指定目录的树形快照，可按深度、后缀及忽略规则过滤，并输出为 JSON 供 Agent 消费；默认隐藏于补全列表，需显式开启 `agent.fs_tools.expose` 才能直接调用。 |
+| `agent` | `agent run <goal…>`<br>`agent tools --json`<br>`agent monitor [session_id]` | 启动内置 Python Agent，通过统一协议协作；`agent tools --json` 导出沙盒工具的 JSON Schema；`agent monitor` 实时查看最新或指定会话的操作轨迹，按 `q` 退出监控。 |
 | `mv` | `mv <source> <target>` | 移动或重命名文件/目录。 |
 | `rm` | `rm [-r] <path> [更多路径]` | 删除文件，带 `-r` 可递归删除目录。 |
 | `exit` / `quit` | `exit` 或 `quit` | 结束 REPL 会话。 |
@@ -80,6 +86,7 @@ HOME_PATH=settings
 - `setting set prompt.input_ellipsis.enabled <true|false>`：开启后，当输入或自动补全内容超过指定长度时，会围绕光标保留左右两侧的可视窗口，并用 `.` 填充被截断的区域，避免光标被推到屏幕之外。
 - `setting set prompt.input_ellipsis.left_width <列宽>` / `setting set prompt.input_ellipsis.right_width <列宽>`：分别配置光标左侧可保留的最大宽度与整体可视窗口的最大显示宽度（单位为等宽字符数），默认值分别为 `30` 与 `50`，必须为非负整数。
 - `setting set history.recent_limit <数量>`：调整历史指令最多保留的条目数（默认 10，设为 0 可禁用历史记录）。
+- `setting set agent.fs_tools.expose <true|false>`：是否在 CLI 中暴露 `fs.read` / `fs.write` / `fs.create` / `fs.tree` 命令。默认 `false`（仅 Agent 调用），设为 `true` 后可手动运行并恢复补全/帮助。
 - `setting set prompt.theme_art_path.<theme> <path>`：为指定主题配置图片结构化文本路径（例如 `prompt.theme_art_path.red-yellow`），仅接受 `.climg` 文件并在补全时只展示目录与 `.climg` 文件；搭配 `tools/image_to_art.py` 生成即可在 `show MyCLI` 中显示彩色图片（旧版本的 `prompt.theme_art_path` 仍作为 `prompt.theme_art_path.blue-purple` 的别名保留）。
 
 ## LLM 命令使用说明
@@ -107,6 +114,50 @@ HOME_PATH=settings
 运行 `llm call` 时 CLI 会在后台调用 Python 脚本，若未设置密钥或缺少依赖，则脚本会退化为本地回显模式，方便调试。
 
 当检测到新的历史记录时，提示符前会出现红色 `[L]` 提醒，可通过执行 `llm recall` 清除。
+
+## 沙盒文件工具（`fs.read` / `fs.write` / `fs.create` / `fs.tree`）
+
+为了支持 Agent 自动执行“读—改—验”的闭环，CLI 内置了四款具备沙盒保护的文件工具。它们只允许访问当前工作目录下、白名单后缀的文本资源（默认 `.py/.md/.txt/.json/.yaml/.toml/.html/.css/.js/.c/.cc/.cpp/.cxx/.h/.hh/.hpp`），所有路径在执行前都会 `realpath` 并验证是否位于沙盒根目录内。
+
+- **`fs.read`**：读取文件内容，可通过 `--max-bytes` 控制最大读取量，使用 `--head`/`--tail` 按行采样，或借助 `--offset`/`--length` 指定字节区间。`--with-line-numbers` 会为输出加上行号，`--hash-only` 则仅返回哈希摘要。执行结果的元数据会记录读取范围、哈希值、是否截断以及耗时。
+- **`fs.write`**：以最小副作用写入文本文件，支持 `--mode overwrite|append`、`--content`/`--content-file` 二选一输入、`--eol` 行尾转换、`--backup` 备份旧文件、`--atomic` 临时文件 + 重命名的原子落盘，并在元数据中给出写前/写后的哈希与写入字节数。若内容超出限制或编码不为 UTF-8，会返回统一错误码。
+- **`fs.create`**：仅在目标文件不存在时创建新文件，可一次性写入 `--content` 文本或从 `--content-file` 复制内容，并支持 `--create-parents`、`--eol`、`--atomic`、`--dry-run` 等选项。元数据会记录写入字节数、哈希值、是否使用原子写入及耗时。
+- **`fs.tree`**：生成目录快照，可通过 `--depth`、`--ext`、`--ignore-file`、`--include-hidden` 等选项筛选，并以 `--format json|text` 输出（Agent 推荐 JSON）。返回值会附带节点总数、是否截断与耗时信息。
+
+`cat` 命令现在等价于 `fs.read`，便于人工快速复核 Agent 读取到的内容。
+
+> 提示：四款沙盒工具默认仅供 Agent 调用，因而不会出现在补全/帮助列表中。若确实需要在 CLI 中直接运行，可执行 `setting set agent.fs_tools.expose true` 暂时暴露它们。
+
+## Agent 协作流程
+
+`agent run <goal…>` 会启动 `tools/agent/agent.py`（默认通过 `python3` 调用），并按照行分隔 JSON 协议与 Python 端建立会话。命令会在派发后台线程后立即返回，提示如何使用 `agent monitor` 追踪进度：
+
+1. CLI 发送 `hello`（包含工具目录、调用限制与沙盒策略）与 `start`（目标描述、当前工作目录）。
+2. Python Agent 可多次返回 `tool_call` 请求调用 `fs.read` / `fs.write` / `fs.create` / `fs.tree`，CLI 在执行前会写入 transcript 并按照限制截断 `stdout`。
+3. Agent 返回 `final` 后会话结束；若进程退出但未显式 `final`，CLI 也会优雅收尾。
+
+会话的完整轨迹会落在 `./artifacts/<session_id>/transcript.jsonl` 中，格式化记录每一次消息、工具调用的入参快照、执行耗时、截断信息及哈希摘要；`summary.txt` 会随流程更新当前结论或失败原因。若 `final` 消息内含 `artifacts[]`，CLI 会在同一目录写入对应文件并在 transcript 中登记路径。你也可以通过 `agent tools --json` 获取四款沙盒工具的 JSON Schema（含参数类型、互斥约束与路径元数据），便于外部 Agent 进行契约校验。
+
+当 Agent 正在后台执行时，提示符前会亮起黄色 `[A]` 指示器；会话自然结束或失败后，它会变为红色 `[A]`，提示可以回顾 `summary.txt` 或进入监控模式。若守卫拦截了危险命令且等待人工确认，`[A]` 会改为黄色闪烁以提醒尽快进入监控确认。运行 `agent monitor [session_id]` 可实时跟踪最新或指定会话的 transcript（不带参数时使用最近一场会话），监控过程中按下 `q` 可退出，会话中出现的守卫告警会以红色高亮并提示 `y/n` 进行人工覆核；退出监控后指示器会自动熄灭。`agent monitor` 的参数同样支持 Tab 自动补全，方便快速定位最近的会话 ID。
+
+## 编排任务 API（`fs.*` 命名空间）
+
+为支持更复杂的多轮编排流程，CLI 额外提供了一组仅供 Agent 调用的工具（默认隐藏，可通过 `agent.fs_tools.expose` 临时暴露）：
+
+- **计划管理（`fs.todo`）**：
+  - `fs.todo plan` / `fs.todo view` 用于创建并查看带版本号的计划；
+  - `fs.todo add` / `fs.todo update` / `fs.todo remove` / `fs.todo reorder` 管理步骤的增删改排；
+  - `fs.todo dep.set` / `fs.todo dep.add` / `fs.todo dep.remove`、`fs.todo split`、`fs.todo merge` 在图结构上维护依赖或拆分/合并大任务；
+  - `fs.todo mark`、`fs.todo block`/`unblock`、`fs.todo checklist`、`fs.todo annotate`、`fs.todo snapshot` 等命令负责状态机推进、阻塞标记、检查清单与注释产物；
+  - `fs.todo history` / `fs.todo undo` / `fs.todo redo` 提供计划层的历史回溯；
+  - `fs.todo brief` 根据当前计划生成 MIC 摘要，`fs.todo signal` 则记录编排信号。
+- **上下文管理（`fs.ctx`）**：`fs.ctx scope` / `fs.ctx capture` / `fs.ctx pin` / `fs.ctx unpin` / `fs.ctx pack_for_mic` / `fs.ctx inject_todo` 维护任务作用域与 side context；全量模式下的扩展命令（如 `fs.ctx ingest`、`fs.ctx search` 等）当前以占位形式返回“not_enabled”，便于后续扩展。
+- **守卫与执行（`fs.guard`、`fs.exec`）**：`fs.guard fs` / `fs.guard shell` / `fs.guard net` 对潜在危险操作给出准入判断，`fs.exec shell` 与 `fs.exec python` 在守卫通过后实际执行命令或 Python 代码并返回结构化结果。
+- **文件快照（`fs.fs`）**：`fs.fs read` / `fs.fs write_safe` 映射到原有沙盒读写能力，同时新增 `fs.fs snapshot` 与 `fs.fs diff` 便于执行前后比对。
+- **风险与审阅**：`fs.risk assess` 会根据步骤优先级/阻塞信息给出风险分级，`fs.request review` 汇总高风险操作的审阅包。
+- **预算、计时与日志**：`fs.budget set` / `fs.budget meter` 维护 token/时间/请求数预算，`fs.timer` 注册超时提醒，`fs.log event` 记录关键事件并可在 `fs.report summary` 中生成压缩总结。
+
+所有命令均返回结构化 JSON，方便外部编排器读取元信息、处理版本冲突并生成更丰富的运行日志。
 
 ## 在配置文件中接入外部接口
 
