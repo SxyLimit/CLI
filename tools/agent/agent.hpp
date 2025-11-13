@@ -6,6 +6,8 @@
 #include "fs_write.hpp"
 #include "fs_create.hpp"
 #include "fs_tree.hpp"
+#include "fs_exec.hpp"
+#include "../../utils/agent_state.hpp"
 #include "../../utils/json.hpp"
 
 #include <filesystem>
@@ -25,6 +27,13 @@
 #include <iostream>
 #include <cerrno>
 #include <cctype>
+#include <condition_variable>
+#include <deque>
+#include <unordered_map>
+#include <atomic>
+#include <mutex>
+#include <random>
+#include <algorithm>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -37,11 +46,94 @@
 
 namespace tool {
 
+struct GuardPromptState {
+  std::string id;
+  std::string sessionId;
+  std::string command;
+  std::string reason;
+  std::atomic<bool> resolved{false};
+  std::atomic<bool> approved{false};
+  std::mutex mutex;
+  std::condition_variable cv;
+};
+
+inline std::string random_guard_prompt_id(){
+  static std::mutex rngMutex;
+  static std::mt19937_64 rng{std::random_device{}()};
+  std::lock_guard<std::mutex> lock(rngMutex);
+  std::uniform_int_distribution<uint64_t> dist;
+  std::ostringstream oss;
+  oss << "guard-" << std::hex << dist(rng);
+  return oss.str();
+}
+
+static std::mutex g_guard_prompt_mutex;
+static std::unordered_map<std::string, std::deque<std::shared_ptr<GuardPromptState>>> g_guard_prompts_by_session;
+
+inline std::shared_ptr<GuardPromptState> register_guard_prompt(const std::string& sessionId,
+                                                              const std::string& command,
+                                                              const std::string& reason){
+  auto prompt = std::make_shared<GuardPromptState>();
+  prompt->id = random_guard_prompt_id();
+  prompt->sessionId = sessionId;
+  prompt->command = command;
+  prompt->reason = reason;
+  {
+    std::lock_guard<std::mutex> lock(g_guard_prompt_mutex);
+    g_guard_prompts_by_session[sessionId].push_back(prompt);
+  }
+  agent_indicator_guard_alert_inc();
+  return prompt;
+}
+
+inline std::shared_ptr<GuardPromptState> next_guard_prompt_for_session(const std::string& sessionId){
+  std::lock_guard<std::mutex> lock(g_guard_prompt_mutex);
+  auto it = g_guard_prompts_by_session.find(sessionId);
+  if(it == g_guard_prompts_by_session.end()) return nullptr;
+  for(const auto& prompt : it->second){
+    if(!prompt->resolved.load(std::memory_order_acquire)) return prompt;
+  }
+  return nullptr;
+}
+
+inline void resolve_guard_prompt(const std::shared_ptr<GuardPromptState>& prompt, bool approved){
+  if(!prompt) return;
+  {
+    std::lock_guard<std::mutex> lock(prompt->mutex);
+    prompt->approved.store(approved, std::memory_order_release);
+    prompt->resolved.store(true, std::memory_order_release);
+  }
+  prompt->cv.notify_all();
+  {
+    std::lock_guard<std::mutex> lock(g_guard_prompt_mutex);
+    auto it = g_guard_prompts_by_session.find(prompt->sessionId);
+    if(it != g_guard_prompts_by_session.end()){
+      auto& dq = it->second;
+      dq.erase(std::remove(dq.begin(), dq.end(), prompt), dq.end());
+      if(dq.empty()) g_guard_prompts_by_session.erase(it);
+    }
+  }
+  agent_indicator_guard_alert_dec();
+}
+
+inline bool wait_for_guard_prompt_decision(const std::shared_ptr<GuardPromptState>& prompt){
+  if(!prompt) return false;
+  std::unique_lock<std::mutex> lock(prompt->mutex);
+  prompt->cv.wait(lock, [&]{ return prompt->resolved.load(std::memory_order_acquire); });
+  return prompt->approved.load(std::memory_order_acquire);
+}
+
 inline std::vector<ToolDefinition> agent_builtin_tools(){
-  return {tool::make_fs_read_tool(),
-          tool::make_fs_write_tool(),
-          tool::make_fs_create_tool(),
-          tool::make_fs_tree_tool()};
+  std::vector<ToolDefinition> defs;
+  defs.push_back(tool::make_fs_read_tool());
+  defs.push_back(tool::make_fs_write_tool());
+  defs.push_back(tool::make_fs_create_tool());
+  defs.push_back(tool::make_fs_tree_tool());
+  ToolDefinition execShell;
+  execShell.ui = tool::FsExecShell::ui();
+  execShell.executor = tool::FsExecShell::run;
+  defs.push_back(execShell);
+  return defs;
 }
 
 inline std::string sanitize_property_name(const std::string& raw){
@@ -531,6 +623,30 @@ struct AgentSession {
     return tokens;
   }
 
+  static ToolExecutionResult json_success(sj::Value data){
+    sj::Object root;
+    root.emplace("ok", sj::Value(true));
+    root.emplace("data", std::move(data));
+    ToolExecutionResult result;
+    result.exitCode = 0;
+    result.output = sj::dump(sj::Value(std::move(root)));
+    result.display = result.output;
+    return result;
+  }
+
+  static ToolExecutionResult json_error(const std::string& message,
+                                        const std::string& code = "bad_request"){
+    sj::Object root;
+    root.emplace("ok", sj::Value(false));
+    root.emplace("error", sj::Value(message));
+    root.emplace("code", sj::Value(code));
+    ToolExecutionResult result;
+    result.exitCode = 1;
+    result.output = sj::dump(sj::Value(std::move(root)));
+    result.display = result.output;
+    return result;
+  }
+
   ToolExecutionResult invoke_tool(const std::string& name, const sj::Value& args){
     ToolExecutionRequest req;
     req.silent = true;
@@ -550,6 +666,47 @@ struct AgentSession {
     if(name == "fs.tree"){
       req.tokens = args_to_tokens_fs_tree(args);
       return FsTree::run(req);
+    }
+    if(name == "fs.exec.shell"){
+      std::string command;
+      if(args.isObject()){
+        const auto& obj = args.asObject();
+        auto it = obj.find("command");
+        if(it != obj.end()) command = it->second.asString();
+      }
+      if(command.empty()){
+        return json_error("missing command");
+      }
+      auto run_command = [&]() -> ToolExecutionResult {
+        ToolExecutionRequest execReq;
+        execReq.silent = true;
+        execReq.forLLM = true;
+        auto execRes = tool::detail::execute_shell(execReq, command, true);
+        sj::Object data;
+        data.emplace("exit_code", sj::Value(execRes.exitCode));
+        data.emplace("stdout", sj::Value(execRes.output));
+        return json_success(sj::Value(std::move(data)));
+      };
+      auto decision = agent::state().guard.shell_guard(command);
+      if(!decision.allowed){
+        auto prompt = register_guard_prompt(sessionId, command, decision.reason);
+        sj::Object payload;
+        payload.emplace("command", sj::Value(command));
+        payload.emplace("reason", sj::Value(decision.reason));
+        payload.emplace("prompt_id", sj::Value(prompt->id));
+        record_event("guard_blocked", sj::Value(std::move(payload)));
+        bool approved = wait_for_guard_prompt_decision(prompt);
+        sj::Object decisionPayload;
+        decisionPayload.emplace("command", sj::Value(command));
+        decisionPayload.emplace("reason", sj::Value(decision.reason));
+        decisionPayload.emplace("prompt_id", sj::Value(prompt->id));
+        decisionPayload.emplace("approved", sj::Value(approved));
+        record_event("guard_decision", sj::Value(std::move(decisionPayload)));
+        if(!approved){
+          return json_error("command rejected by guard", "guard_rejected");
+        }
+      }
+      return run_command();
     }
     ToolExecutionResult res;
     res.exitCode = 1;
@@ -787,10 +944,31 @@ inline std::string summarize_transcript_payload(const std::string& eventKind, co
     if(!path.empty()) detail += " -> " + path;
     return detail;
   }
+  if(eventKind == "guard_blocked"){
+    std::string command = truncate_summary(findString("command"), 120);
+    std::string reason = truncate_summary(findString("reason"), 120);
+    std::string prompt = findString("prompt_id");
+    std::ostringstream oss;
+    oss << "guard blocked";
+    if(!command.empty()) oss << ": " << command;
+    if(!reason.empty()) oss << " (reason: " << reason << ")";
+    if(!prompt.empty()) oss << " [prompt " << prompt << "]";
+    return oss.str();
+  }
+  if(eventKind == "guard_decision"){
+    bool approved = findBool("approved", false);
+    std::string command = truncate_summary(findString("command"), 120);
+    std::string prompt = findString("prompt_id");
+    std::ostringstream oss;
+    oss << "guard " << (approved ? "approved" : "rejected");
+    if(!command.empty()) oss << ": " << command;
+    if(!prompt.empty()) oss << " [prompt " << prompt << "]";
+    return oss.str();
+  }
   return sj::dump(data);
 }
 
-inline std::string summarize_transcript_entry(const std::string& raw){
+inline std::string summarize_transcript_entry(const std::string& raw, std::string* outEventKind = nullptr){
   try{
     sj::Value value = sj::parse(raw);
     if(!value.isObject()) return raw;
@@ -799,6 +977,7 @@ inline std::string summarize_transcript_entry(const std::string& raw){
     if(auto it = obj.find("ts"); it != obj.end()) ts = it->second.asString();
     std::string eventKind;
     if(auto it = obj.find("event"); it != obj.end()) eventKind = it->second.asString();
+    if(outEventKind) *outEventKind = eventKind;
     std::string detail;
     if(auto it = obj.find("data"); it != obj.end()) detail = summarize_transcript_payload(eventKind, it->second);
     if(detail.empty() && !eventKind.empty()) detail = eventKind;
@@ -863,9 +1042,43 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
     result.display = result.output;
     return result;
   }
-  std::cout << "[agent] monitoring session " << sessionId << " (press q to quit)" << std::endl;
+  struct MonitorActiveGuard {
+    bool active = true;
+    ~MonitorActiveGuard(){ if(active) agent_monitor_set_active(false); }
+  } activeGuard;
+  agent_monitor_set_active(true);
+  std::cout << "[agent] monitoring session " << sessionId << " (press q to quit, y/n to respond to guard prompts)" << std::endl;
   auto emit = [&](const std::string& raw){
-    std::cout << summarize_transcript_entry(raw) << std::endl;
+    std::string eventKind;
+    std::string line = summarize_transcript_entry(raw, &eventKind);
+    const char* color = nullptr;
+    if(eventKind == "guard_blocked"){
+      color = ansi::RED;
+    }else if(eventKind == "guard_decision"){
+      if(line.find("rejected") != std::string::npos) color = ansi::RED;
+      else color = ansi::GREEN;
+    }
+    if(color){
+      std::cout << color << line << ansi::RESET << std::endl;
+    }else{
+      std::cout << line << std::endl;
+    }
+  };
+  std::shared_ptr<GuardPromptState> currentPrompt;
+  std::string shownPromptId;
+  auto show_prompt = [&](){
+    if(!currentPrompt || currentPrompt->resolved.load(std::memory_order_acquire)) return;
+    if(shownPromptId == currentPrompt->id) return;
+    shownPromptId = currentPrompt->id;
+    std::string command = truncate_summary(currentPrompt->command, 200);
+    std::string reason = truncate_summary(currentPrompt->reason, 200);
+    std::cout << ansi::RED << "[guard] Command blocked";
+    if(!command.empty()) std::cout << ": " << command;
+    std::cout << ansi::RESET << std::endl;
+    if(!reason.empty()){
+      std::cout << ansi::RED << "[guard] Reason: " << reason << ansi::RESET << std::endl;
+    }
+    std::cout << ansi::YELLOW << "Press y to approve or n to reject this command." << ansi::RESET << std::endl;
   };
   std::string line;
   std::streampos lastPos = stream.tellg();
@@ -896,6 +1109,18 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
     if(stream.bad()){
       stream.clear();
     }
+    auto nextPrompt = next_guard_prompt_for_session(sessionId);
+    if(nextPrompt && nextPrompt->resolved.load(std::memory_order_acquire)){
+      nextPrompt.reset();
+    }
+    currentPrompt = nextPrompt;
+    if(currentPrompt && currentPrompt->resolved.load(std::memory_order_acquire)){
+      currentPrompt.reset();
+    }
+    if(!currentPrompt){
+      shownPromptId.clear();
+    }
+    show_prompt();
   };
   drain_new_entries();
   bool running = true;
@@ -910,9 +1135,26 @@ inline ToolExecutionResult monitor_agent_session(const std::string& sessionId,
     if(ready > 0 && FD_ISSET(STDIN_FILENO, &readfds)){
       char ch = 0;
       ssize_t rc = ::read(STDIN_FILENO, &ch, 1);
-      if(rc > 0 && (ch == 'q' || ch == 'Q')){
-        running = false;
-        break;
+      if(rc > 0){
+        if(ch == 'q' || ch == 'Q'){
+          running = false;
+          break;
+        }
+        if(currentPrompt && !currentPrompt->resolved.load(std::memory_order_acquire)){
+          if(ch == 'y' || ch == 'Y'){
+            resolve_guard_prompt(currentPrompt, true);
+            currentPrompt.reset();
+            shownPromptId.clear();
+            std::cout << ansi::YELLOW << "[guard] override approved" << ansi::RESET << std::endl;
+            drain_new_entries();
+          }else if(ch == 'n' || ch == 'N'){
+            resolve_guard_prompt(currentPrompt, false);
+            currentPrompt.reset();
+            shownPromptId.clear();
+            std::cout << ansi::YELLOW << "[guard] override rejected" << ansi::RESET << std::endl;
+            drain_new_entries();
+          }
+        }
       }
     }else if(ready < 0){
       if(errno == EINTR) continue;
@@ -987,6 +1229,7 @@ inline void agent_session_thread_main(std::shared_ptr<AgentSession> session, std
     allowed.push_back(sj::Value("fs.write"));
     allowed.push_back(sj::Value("fs.create"));
     allowed.push_back(sj::Value("fs.tree"));
+    allowed.push_back(sj::Value("fs.exec.shell"));
     policy.emplace("allowed_tools", sj::Value(std::move(allowed)));
     policy.emplace("sandbox_root", sj::Value(session->cfg.sandboxRoot.string()));
     hello.emplace("policy", sj::Value(std::move(policy)));

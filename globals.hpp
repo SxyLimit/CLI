@@ -28,6 +28,7 @@ namespace ansi {
   inline constexpr const char* GREEN = "\x1b[32m";
   inline constexpr const char* YELLOW= "\x1b[33m";
   inline constexpr const char* RED   = "\x1b[31m";
+  inline constexpr const char* BLINK = "\x1b[5m";
   inline constexpr const char* CYAN  = "\x1b[36m";
   inline constexpr const char* BOLD  = "\x1b[1m";
   inline constexpr const char* DIM   = "\x1b[2m";
@@ -328,6 +329,10 @@ void update_prompt_indicator(const std::string& id, const PromptIndicatorState& 
 PromptIndicatorState prompt_indicator_current(const std::string& id);
 
 void llm_set_pending(bool pending);
+
+void agent_indicator_guard_alert_inc();
+void agent_indicator_guard_alert_dec();
+void agent_monitor_set_active(bool active);
 
 ToolExecutionResult invoke_registered_tool(const std::string& line, bool silent = true);
 
