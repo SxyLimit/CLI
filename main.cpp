@@ -207,14 +207,22 @@ static std::string trim_copy(const std::string& s){
 static std::vector<std::string> g_command_history;
 static std::atomic<int> g_agent_running_sessions{0};
 static std::atomic<int> g_agent_pending_sessions{0};
+static std::atomic<int> g_agent_guard_alerts{0};
+static std::atomic<bool> g_agent_monitor_active{false};
 
 static void agent_indicator_refresh_state(){
   PromptIndicatorState state = prompt_indicator_current("agent");
   state.text = "A";
   state.bracketColor = ansi::WHITE;
+  int guardAlerts = g_agent_guard_alerts.load(std::memory_order_relaxed);
+  bool monitorActive = g_agent_monitor_active.load(std::memory_order_relaxed);
   int running = g_agent_running_sessions.load(std::memory_order_relaxed);
   int pending = g_agent_pending_sessions.load(std::memory_order_relaxed);
-  if(running > 0){
+  if(guardAlerts > 0){
+    state.visible = true;
+    state.textColor = monitorActive ? std::string(ansi::YELLOW)
+                                    : std::string(ansi::YELLOW) + ansi::BLINK;
+  }else if(running > 0){
     state.visible = true;
     state.textColor = ansi::YELLOW;
   }else if(pending > 0){
@@ -352,6 +360,8 @@ static std::filesystem::path resolve_env_file_path(){
 void agent_indicator_clear(){
   g_agent_running_sessions.store(0, std::memory_order_relaxed);
   g_agent_pending_sessions.store(0, std::memory_order_relaxed);
+  g_agent_guard_alerts.store(0, std::memory_order_relaxed);
+  g_agent_monitor_active.store(false, std::memory_order_relaxed);
   agent_indicator_refresh_state();
 }
 
@@ -368,6 +378,21 @@ void agent_indicator_set_finished(){
 
 void agent_indicator_mark_acknowledged(){
   agent_indicator_decrement(g_agent_pending_sessions);
+  agent_indicator_refresh_state();
+}
+
+void agent_indicator_guard_alert_inc(){
+  g_agent_guard_alerts.fetch_add(1, std::memory_order_relaxed);
+  agent_indicator_refresh_state();
+}
+
+void agent_indicator_guard_alert_dec(){
+  agent_indicator_decrement(g_agent_guard_alerts);
+  agent_indicator_refresh_state();
+}
+
+void agent_monitor_set_active(bool active){
+  g_agent_monitor_active.store(active, std::memory_order_relaxed);
   agent_indicator_refresh_state();
 }
 

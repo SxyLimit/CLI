@@ -85,6 +85,7 @@ AGENT_SYSTEM_PROMPT = (
     "Use the schema: {\"type\": \"tool\" | \"final\", \"thought\": string, \"tool\": string?, \"args\": object?, \"answer\": string?, \"artifacts\": list?}. "
     "When \"type\" is \"tool\", include the tool name in \"tool\" and provide arguments in \"args\" matching the provided catalog. "
     "When \"type\" is \"final\", supply the human-facing summary in \"answer\" and optional artifacts (with name/mime/content fields). "
+    "Run terminal commands with fs.exec.shell and Python code with fs.exec.python instead of assuming implicit execution. "
     "Do not invent tools or arguments outside the policy. Provide concise thoughts explaining the reason for the action."
 )
 

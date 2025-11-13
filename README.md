@@ -138,7 +138,26 @@ HOME_PATH=settings
 
 会话的完整轨迹会落在 `./artifacts/<session_id>/transcript.jsonl` 中，格式化记录每一次消息、工具调用的入参快照、执行耗时、截断信息及哈希摘要；`summary.txt` 会随流程更新当前结论或失败原因。若 `final` 消息内含 `artifacts[]`，CLI 会在同一目录写入对应文件并在 transcript 中登记路径。你也可以通过 `agent tools --json` 获取四款沙盒工具的 JSON Schema（含参数类型、互斥约束与路径元数据），便于外部 Agent 进行契约校验。
 
-当 Agent 正在后台执行时，提示符前会亮起黄色 `[A]` 指示器；会话自然结束或失败后，它会变为红色 `[A]`，提示可以回顾 `summary.txt` 或进入监控模式。运行 `agent monitor [session_id]` 可实时跟踪最新或指定会话的 transcript（不带参数时使用最近一场会话），监控过程中按下 `q` 即可退出；退出监控后指示器会自动熄灭。`agent monitor` 的参数同样支持 Tab 自动补全，方便快速定位最近的会话 ID。
+当 Agent 正在后台执行时，提示符前会亮起黄色 `[A]` 指示器；会话自然结束或失败后，它会变为红色 `[A]`，提示可以回顾 `summary.txt` 或进入监控模式。若守卫拦截了危险命令且等待人工确认，`[A]` 会改为黄色闪烁以提醒尽快进入监控确认。运行 `agent monitor [session_id]` 可实时跟踪最新或指定会话的 transcript（不带参数时使用最近一场会话），监控过程中按下 `q` 可退出，会话中出现的守卫告警会以红色高亮并提示 `y/n` 进行人工覆核；退出监控后指示器会自动熄灭。`agent monitor` 的参数同样支持 Tab 自动补全，方便快速定位最近的会话 ID。
+
+## 编排任务 API（`fs.*` 命名空间）
+
+为支持更复杂的多轮编排流程，CLI 额外提供了一组仅供 Agent 调用的工具（默认隐藏，可通过 `agent.fs_tools.expose` 临时暴露）：
+
+- **计划管理（`fs.todo`）**：
+  - `fs.todo plan` / `fs.todo view` 用于创建并查看带版本号的计划；
+  - `fs.todo add` / `fs.todo update` / `fs.todo remove` / `fs.todo reorder` 管理步骤的增删改排；
+  - `fs.todo dep.set` / `fs.todo dep.add` / `fs.todo dep.remove`、`fs.todo split`、`fs.todo merge` 在图结构上维护依赖或拆分/合并大任务；
+  - `fs.todo mark`、`fs.todo block`/`unblock`、`fs.todo checklist`、`fs.todo annotate`、`fs.todo snapshot` 等命令负责状态机推进、阻塞标记、检查清单与注释产物；
+  - `fs.todo history` / `fs.todo undo` / `fs.todo redo` 提供计划层的历史回溯；
+  - `fs.todo brief` 根据当前计划生成 MIC 摘要，`fs.todo signal` 则记录编排信号。
+- **上下文管理（`fs.ctx`）**：`fs.ctx scope` / `fs.ctx capture` / `fs.ctx pin` / `fs.ctx unpin` / `fs.ctx pack_for_mic` / `fs.ctx inject_todo` 维护任务作用域与 side context；全量模式下的扩展命令（如 `fs.ctx ingest`、`fs.ctx search` 等）当前以占位形式返回“not_enabled”，便于后续扩展。
+- **守卫与执行（`fs.guard`、`fs.exec`）**：`fs.guard fs` / `fs.guard shell` / `fs.guard net` 对潜在危险操作给出准入判断，`fs.exec shell` 与 `fs.exec python` 在守卫通过后实际执行命令或 Python 代码并返回结构化结果。
+- **文件快照（`fs.fs`）**：`fs.fs read` / `fs.fs write_safe` 映射到原有沙盒读写能力，同时新增 `fs.fs snapshot` 与 `fs.fs diff` 便于执行前后比对。
+- **风险与审阅**：`fs.risk assess` 会根据步骤优先级/阻塞信息给出风险分级，`fs.request review` 汇总高风险操作的审阅包。
+- **预算、计时与日志**：`fs.budget set` / `fs.budget meter` 维护 token/时间/请求数预算，`fs.timer` 注册超时提醒，`fs.log event` 记录关键事件并可在 `fs.report summary` 中生成压缩总结。
+
+所有命令均返回结构化 JSON，方便外部编排器读取元信息、处理版本冲突并生成更丰富的运行日志。
 
 ## 在配置文件中接入外部接口
 
