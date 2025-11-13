@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tool_common.hpp"
-#include "../utils/agent_commands.hpp"
+#include "../tool_common.hpp"
+#include "../../utils/agent_commands.hpp"
 
 namespace tool {
 

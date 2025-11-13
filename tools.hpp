@@ -27,13 +27,13 @@
 #include "tools/rm.hpp"
 #include "tools/p.hpp"
 #include "tools/agent/agent.hpp"
-#include "tools/fs_todo.hpp"
-#include "tools/fs_ctx.hpp"
-#include "tools/fs_guard.hpp"
-#include "tools/fs_exec.hpp"
-#include "tools/fs_fs.hpp"
-#include "tools/fs_risk.hpp"
-#include "tools/fs_admin.hpp"
+#include "tools/agent/fs_todo.hpp"
+#include "tools/agent/fs_ctx.hpp"
+#include "tools/agent/fs_guard.hpp"
+#include "tools/agent/fs_exec.hpp"
+#include "tools/agent/fs_fs.hpp"
+#include "tools/agent/fs_risk.hpp"
+#include "tools/agent/fs_admin.hpp"
 
 inline std::vector<std::string> render_mycli_ascii_art() {
   return {
