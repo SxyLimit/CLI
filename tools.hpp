@@ -27,6 +27,13 @@
 #include "tools/rm.hpp"
 #include "tools/p.hpp"
 #include "tools/agent/agent.hpp"
+#include "tools/fs_todo.hpp"
+#include "tools/fs_ctx.hpp"
+#include "tools/fs_guard.hpp"
+#include "tools/fs_exec.hpp"
+#include "tools/fs_fs.hpp"
+#include "tools/fs_risk.hpp"
+#include "tools/fs_admin.hpp"
 
 inline std::vector<std::string> render_mycli_ascii_art() {
   return {
@@ -1120,6 +1127,17 @@ inline void register_all_tools(){
   REG.registerTool(tool::make_mv_tool());
   REG.registerTool(tool::make_rm_tool());
   REG.registerTool(tool::make_agent_tool());
+  REG.registerTool(tool::make_fs_todo_tool());
+  REG.registerTool(tool::make_fs_ctx_tool());
+  REG.registerTool(tool::make_fs_guard_tool());
+  REG.registerTool(tool::make_fs_exec_tool());
+  REG.registerTool(tool::make_fs_fs_tool());
+  REG.registerTool(tool::make_fs_risk_tool());
+  REG.registerTool(tool::make_fs_request_tool());
+  REG.registerTool(tool::make_fs_budget_tool());
+  REG.registerTool(tool::make_fs_timer_tool());
+  REG.registerTool(tool::make_fs_log_tool());
+  REG.registerTool(tool::make_fs_report_tool());
   REG.registerTool(tool::make_exit_tool("exit"));
   REG.registerTool(tool::make_exit_tool("quit"));
 }
