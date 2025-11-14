@@ -70,7 +70,7 @@ def save_state(state: Dict[str, Any]) -> None:
     HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = HISTORY_PATH.with_suffix(".tmp")
     try:
-        with tmp_path.open("w", encoding="utf-8") as fp:
+        with tmp_path.open("w", encoding="utf-8", errors="backslashreplace") as fp:
             json.dump(state, fp, ensure_ascii=False, indent=2)
             fp.flush()
             os.fsync(fp.fileno())

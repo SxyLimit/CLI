@@ -120,7 +120,7 @@ HOME_PATH=settings
 
 `llm` 命令由 `tools/llm.py` 实现，并默认持久化多轮会话（保存在 `./settings/mycli_llm_history.json`）：
 
-- `llm call <消息>`：发送文本到模型并直接回显回复。当前会话的完整上下文（含系统提示词与历史消息）会一并交给模型，等待返回时提示符前会出现红色 `[L]` 提醒。
+- `llm call <消息>`：异步发送文本到模型并立即返回。当前会话的完整上下文（含系统提示词与历史消息）会一并交给模型，等待返回时提示符前会出现红色 `[L]` 提醒。
 - `llm recall`：查看当前会话的完整对话历史，同时清除 `[L]` 提醒。
 - `llm new`：创建一个全新的会话并自动切换过去，初始名称为 `未命名<N>-YYYYMMDDHHMMSS`。
 - `llm switch <对话>`：切换到已有会话，支持补全会话名称。
@@ -138,7 +138,7 @@ HOME_PATH=settings
 | `LLM_SYSTEM_PROMPT` | 系统提示词，默认值与官方示例一致。|
 | `LLM_TEMPERATURE` | 温度参数，默认 `0.6`。|
 
-运行 `llm call` 时 CLI 会调用 Python 脚本完成请求，若未设置密钥或缺少依赖，则脚本会退化为本地回显模式，方便调试。
+运行 `llm call` 时 CLI 会在后台调用 Python 脚本，若未设置密钥或缺少依赖，则脚本会退化为本地回显模式，方便调试。
 
 当检测到新的历史记录时，提示符前会出现红色 `[L]` 提醒，可通过执行 `llm recall` 清除。
 
@@ -149,7 +149,7 @@ HOME_PATH=settings
 | 命令 | 基本用法 | 说明 |
 | --- | --- | --- |
 | `agent run` | `agent run <goal…>` | 启动内置 Python Agent 并在后台持续协作。 |
-| `agent saferun` | `agent saferun [-a] <goal…>` | 启动 Agent 并强制人工审核：默认针对非 `fs.*` 工具（含高风险的 `fs.exec.*`）提示审核，搭配 `-a` 时扩展至所有工具。 |
+| `agent saferun` | `agent saferun [-a] <goal…>` | 启动 Agent 并强制人工审核：默认对非 `fs.*` 工具弹出确认，搭配 `-a` 时扩展至所有工具。 |
 | `agent monitor` | `agent monitor [session_id]` | 监控最新或指定会话的执行轨迹，监控界面按 `q` 退出。 |
 | `agent tools` | `agent tools --json` | 导出沙盒工具的 JSON Schema，便于外部 Agent 校验契约。 |
 
