@@ -40,14 +40,14 @@ struct Llm {
         cmd += " ";
         cmd += shellEscape(args[i]);
       }
-      cmd = "MYCLI_LLM_SILENT=1 " + cmd + " > /dev/null 2>&1";
-      try{
-        std::thread([command = cmd]{ std::system(command.c_str()); }).detach();
-      }catch(const std::system_error&){
-        std::system(cmd.c_str());
-      }
       llm_set_pending(true);
-      return detail::text_result("[llm] request dispatched asynchronously. Use `llm recall` to view replies.\n");
+      auto result = detail::execute_shell(request, cmd);
+      if(result.exitCode != 0){
+        g_parse_error_cmd = "llm";
+      }
+      llm_poll();
+      llm_set_pending(false);
+      return result;
     }
     if(sub == "recall"){
       auto result = detail::execute_shell(request, "python3 tools/llm.py recall");

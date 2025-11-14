@@ -512,11 +512,20 @@ struct AgentSession {
                                                             const sj::Value& args){
     if(reviewMode == ManualReviewMode::None) return std::nullopt;
     bool isFsTool = toolName.rfind("fs.", 0) == 0;
-    bool require = reviewMode == ManualReviewMode::All || (!isFsTool && reviewMode == ManualReviewMode::NonFsOnly);
+    bool isFsExec = toolName.rfind("fs.exec.", 0) == 0;
+    bool treatAsFs = isFsTool && !isFsExec;
+    bool require = false;
+    std::string reason;
+    if(reviewMode == ManualReviewMode::All){
+      require = true;
+      reason = "manual review required for all tools";
+    }else if(reviewMode == ManualReviewMode::NonFsOnly && !treatAsFs){
+      require = true;
+      reason = isFsExec ? "manual review required for fs.exec tools"
+                        : "manual review required for non-fs tools";
+    }
     if(!require) return std::nullopt;
-    std::string reason = reviewMode == ManualReviewMode::All
-                           ? "manual review required for all tools"
-                           : "manual review required for non-fs tools";
+    if(reason.empty()) reason = "manual review required";
     std::string command = summarize_tool_call(toolName, args);
     auto prompt = register_guard_prompt(sessionId, command, reason);
     sj::Object payload;
