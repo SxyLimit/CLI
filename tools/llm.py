@@ -27,6 +27,64 @@ CONFIG_HOME = resolve_config_home()
 HISTORY_PATH = CONFIG_HOME / "mycli_llm_history.json"
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
+SURROGATE_MIN = 0xD800
+SURROGATE_MAX = 0xDFFF
+HIGH_SURROGATE_MAX = 0xDBFF
+LOW_SURROGATE_MIN = 0xDC00
+LOW_SURROGATE_MAX = 0xDFFF
+
+
+def _contains_surrogate(text: str) -> bool:
+    return any(SURROGATE_MIN <= ord(ch) <= SURROGATE_MAX for ch in text)
+
+
+def repair_surrogates(text: str) -> str:
+    if not text or not _contains_surrogate(text):
+        return text
+    repaired: List[str] = []
+    i = 0
+    length = len(text)
+    while i < length:
+        code = ord(text[i])
+        if SURROGATE_MIN <= code <= SURROGATE_MAX:
+            if code <= HIGH_SURROGATE_MAX and i + 1 < length:
+                next_code = ord(text[i + 1])
+                if LOW_SURROGATE_MIN <= next_code <= LOW_SURROGATE_MAX:
+                    combined = 0x10000 + ((code - SURROGATE_MIN) << 10) + (next_code - LOW_SURROGATE_MIN)
+                    repaired.append(chr(combined))
+                    i += 2
+                    continue
+            repaired.append("\ufffd")
+        else:
+            repaired.append(text[i])
+        i += 1
+    return "".join(repaired)
+
+
+def sanitize_state_text(state: Dict[str, Any]) -> None:
+    active = state.get("active")
+    if isinstance(active, str):
+        state["active"] = repair_surrogates(active)
+    conversations = state.get("conversations")
+    if not isinstance(conversations, list):
+        return
+    for conv in conversations:
+        if not isinstance(conv, dict):
+            continue
+        for key in ("name", "prefix", "timestamp"):
+            value = conv.get(key)
+            if isinstance(value, str):
+                conv[key] = repair_surrogates(value)
+        messages = conv.get("messages")
+        if not isinstance(messages, list):
+            continue
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = repair_surrogates(content)
+
 def load_env_file() -> None:
     if not ENV_PATH.exists():
         return
@@ -63,11 +121,14 @@ def load_state() -> Dict[str, Any]:
             raw = json.load(fp)
     except Exception:
         return default_state()
-    return ensure_state_shape(raw)
+    state = ensure_state_shape(raw)
+    sanitize_state_text(state)
+    return state
 
 
 def save_state(state: Dict[str, Any]) -> None:
     HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    sanitize_state_text(state)
     tmp_path = HISTORY_PATH.with_suffix(".tmp")
     try:
         with tmp_path.open("w", encoding="utf-8", errors="backslashreplace") as fp:
@@ -192,7 +253,7 @@ def call_openai(messages: List[Dict[str, str]], *, temperature: Optional[float] 
         OpenAI = None  # type: ignore
 
     if not api_key or OpenAI is None:
-        return fallback or "[stub] no api key"
+        return repair_surrogates(fallback or "[stub] no api key")
 
     try:
         client = OpenAI(api_key=api_key, base_url=base_url)
@@ -207,14 +268,14 @@ def call_openai(messages: List[Dict[str, str]], *, temperature: Optional[float] 
             message = getattr(first, "message", None)
             content = getattr(message, "content", None) if message else None
             if content:
-                return content
+                return repair_surrogates(content)
         return "(no content returned)"
     except Exception as exc:
-        return f"[error] {exc}"
+        return repair_surrogates(f"[error] {exc}")
 
 
 def get_system_prompt() -> str:
-    return os.getenv("LLM_SYSTEM_PROMPT", SYSTEM_PROMPT)
+    return repair_surrogates(os.getenv("LLM_SYSTEM_PROMPT", SYSTEM_PROMPT))
 
 
 def find_conversation(state: Dict[str, Any], name: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -244,6 +305,7 @@ def next_untitled_prefix(state: Dict[str, Any]) -> Tuple[str, int]:
 def create_conversation(state: Dict[str, Any], prefix: Optional[str] = None) -> Dict[str, Any]:
     if prefix is None:
         prefix, _ = next_untitled_prefix(state)
+    prefix = repair_surrogates(prefix)
     created_at = time.time()
     ts_str = timestamp_string(created_at)
     name = build_conversation_name(prefix, ts_str)
@@ -266,7 +328,7 @@ def conversation_messages_for_api(conv: Dict[str, Any]) -> List[Dict[str, str]]:
         role = item.get("role")
         content = item.get("content")
         if role in {"user", "assistant"} and isinstance(content, str):
-            messages.append({"role": role, "content": content})
+            messages.append({"role": role, "content": repair_surrogates(content)})
     return messages
 
 
@@ -278,7 +340,7 @@ def transcript_for_title(conv: Dict[str, Any]) -> str:
         if not isinstance(content, str):
             continue
         prefix = "用户" if role == "user" else "助手"
-        lines.append(f"{prefix}: {content}")
+        lines.append(f"{prefix}: {repair_surrogates(content)}")
     return "\n".join(lines)
 
 
@@ -286,7 +348,7 @@ def sanitize_title(title: str) -> str:
     cleaned = title.replace("\n", " ").strip()
     cleaned = cleaned.replace("-", "")
     cleaned = "".join(ch for ch in cleaned if ch not in "\"'\u3000")
-    return cleaned[:10]
+    return repair_surrogates(cleaned)[:10]
 
 
 def maybe_auto_name_conversation(state: Dict[str, Any], conv: Dict[str, Any]) -> None:
@@ -327,7 +389,7 @@ def format_conversation(conv: Dict[str, Any]) -> str:
             when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
             when = f"[{when}] "
         role_label = "User" if role == "user" else "Assistant"
-        lines.append(f"{when}{role_label}: {content}")
+        lines.append(f"{when}{role_label}: {repair_surrogates(content)}")
     return "\n".join(lines)
 
 
@@ -348,7 +410,7 @@ def handle_call(args: List[str]) -> int:
     if len(args) < 1:
         print("usage: llm call <message>")
         return 1
-    prompt = " ".join(args)
+    prompt = repair_surrogates(" ".join(args))
     state = load_state()
     conv = ensure_active_conversation(state)
     ts = time.time()
@@ -404,7 +466,7 @@ def handle_rename(args: List[str]) -> int:
     if len(args) != 1:
         print("usage: llm rename <name>")
         return 1
-    new_prefix = args[0].strip()
+    new_prefix = repair_surrogates(args[0].strip())
     if not new_prefix:
         print("对话名称不能为空。")
         return 1
