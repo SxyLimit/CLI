@@ -34,6 +34,7 @@
 #include <mutex>
 #include <random>
 #include <algorithm>
+#include <exception>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -401,6 +402,33 @@ inline std::string clamp_stdout(const std::string& text, size_t limit, bool& tru
   return text.substr(0, limit);
 }
 
+enum class ManualReviewMode {
+  None,
+  NonFsOnly,
+  All
+};
+
+inline std::string manual_review_mode_key(ManualReviewMode mode){
+  switch(mode){
+    case ManualReviewMode::None: return "none";
+    case ManualReviewMode::NonFsOnly: return "non_fs";
+    case ManualReviewMode::All: return "all";
+  }
+  return "none";
+}
+
+inline std::string manual_review_mode_description(ManualReviewMode mode){
+  switch(mode){
+    case ManualReviewMode::None:
+      return "manual review disabled";
+    case ManualReviewMode::NonFsOnly:
+      return "manual review required for non-fs tools";
+    case ManualReviewMode::All:
+      return "manual review required for all tools";
+  }
+  return "manual review disabled";
+}
+
 struct AgentSession {
   AgentFsConfig cfg;
   std::string sessionId;
@@ -411,6 +439,7 @@ struct AgentSession {
   std::string finalAnswer;
   bool finalReceived = false;
   std::string finalSummary;
+  ManualReviewMode reviewMode = ManualReviewMode::None;
 
   AgentSession(){
     cfg = default_agent_fs_config();
@@ -452,6 +481,64 @@ struct AgentSession {
 #ifndef _WIN32
     close_agent_process(process);
 #endif
+  }
+
+  std::string review_mode_string() const {
+    return manual_review_mode_key(reviewMode);
+  }
+
+  std::string review_mode_human() const {
+    return manual_review_mode_description(reviewMode);
+  }
+
+  static std::string summarize_tool_call(const std::string& toolName, const sj::Value& args){
+    std::string summary = "tool " + toolName;
+    try{
+      if(args.type() != sj::Value::Type::Null){
+        std::string dumped = sj::dump(args);
+        if(dumped.size() > 200){
+          dumped = dumped.substr(0, 200) + "...";
+        }
+        if(!dumped.empty()){
+          summary += " " + dumped;
+        }
+      }
+    }catch(const std::exception&){
+    }
+    return summary;
+  }
+
+  std::optional<ToolExecutionResult> enforce_manual_review(const std::string& toolName,
+                                                            const sj::Value& args){
+    if(reviewMode == ManualReviewMode::None) return std::nullopt;
+    bool isFsTool = toolName.rfind("fs.", 0) == 0;
+    bool require = reviewMode == ManualReviewMode::All || (!isFsTool && reviewMode == ManualReviewMode::NonFsOnly);
+    if(!require) return std::nullopt;
+    std::string reason = reviewMode == ManualReviewMode::All
+                           ? "manual review required for all tools"
+                           : "manual review required for non-fs tools";
+    std::string command = summarize_tool_call(toolName, args);
+    auto prompt = register_guard_prompt(sessionId, command, reason);
+    sj::Object payload;
+    payload.emplace("command", sj::Value(command));
+    payload.emplace("reason", sj::Value(reason));
+    payload.emplace("prompt_id", sj::Value(prompt->id));
+    payload.emplace("tool", sj::Value(toolName));
+    payload.emplace("manual_review", sj::Value(true));
+    record_event("guard_blocked", sj::Value(std::move(payload)));
+    bool approved = wait_for_guard_prompt_decision(prompt);
+    sj::Object decisionPayload;
+    decisionPayload.emplace("command", sj::Value(command));
+    decisionPayload.emplace("reason", sj::Value(reason));
+    decisionPayload.emplace("prompt_id", sj::Value(prompt->id));
+    decisionPayload.emplace("approved", sj::Value(approved));
+    decisionPayload.emplace("tool", sj::Value(toolName));
+    decisionPayload.emplace("manual_review", sj::Value(true));
+    record_event("guard_decision", sj::Value(std::move(decisionPayload)));
+    if(!approved){
+      return json_error("tool execution rejected by manual review", "manual_review_rejected");
+    }
+    return std::nullopt;
   }
 
   void record_event(const std::string& kind, const sj::Value& payload){
@@ -651,6 +738,9 @@ struct AgentSession {
     ToolExecutionRequest req;
     req.silent = true;
     req.forLLM = true;
+    if(auto manual = enforce_manual_review(name, args); manual.has_value()){
+      return *manual;
+    }
     if(name == "fs.read"){
       req.tokens = args_to_tokens_fs_read(args);
       return FsRead::run(req);
@@ -818,7 +908,7 @@ struct AgentCompletion {
 
     auto sw = splitLastWord(buffer);
     bool trailingSpace = (!buffer.empty() && std::isspace(static_cast<unsigned char>(buffer.back())));
-    static const std::vector<std::string> subs{"run", "tools", "monitor"};
+    static const std::vector<std::string> subs{"run", "saferun", "tools", "monitor"};
 
     auto addSubcommand = [&](const std::string& sub){
       cand.items.push_back(sw.before + sub);
@@ -849,6 +939,38 @@ struct AgentCompletion {
         cand.matchDetails.push_back(match);
       }
       sortCandidatesByMatch(sw.word, cand);
+      return cand;
+    }
+
+    if(tokens.size() >= 2 && tokens[1] == "saferun"){
+      bool hasFlag = false;
+      for(size_t i = 2; i < tokens.size(); ++i){
+        if(tokens[i] == "-a"){ hasFlag = true; break; }
+      }
+      if(!hasFlag){
+        if(tokens.size() == 2 && trailingSpace){
+          cand.items.push_back(sw.before + "-a");
+          cand.labels.push_back("-a");
+          cand.matchPositions.push_back({});
+          cand.annotations.push_back("require review for all tools");
+          cand.exactMatches.push_back(false);
+          cand.matchDetails.push_back({});
+          return cand;
+        }
+        if(tokens.size() == 3 && !trailingSpace){
+          MatchResult match = compute_match("-a", sw.word);
+          if(match.matched){
+            cand.items.push_back(sw.before + "-a");
+            cand.labels.push_back("-a");
+            cand.matchPositions.push_back(match.positions);
+            cand.annotations.push_back("require review for all tools");
+            cand.exactMatches.push_back(match.exact);
+            cand.matchDetails.push_back(match);
+            sortCandidatesByMatch(sw.word, cand);
+          }
+          return cand;
+        }
+      }
       return cand;
     }
 
@@ -1232,6 +1354,7 @@ inline void agent_session_thread_main(std::shared_ptr<AgentSession> session, std
     allowed.push_back(sj::Value("fs.exec.shell"));
     policy.emplace("allowed_tools", sj::Value(std::move(allowed)));
     policy.emplace("sandbox_root", sj::Value(session->cfg.sandboxRoot.string()));
+    policy.emplace("manual_review_mode", sj::Value(session->review_mode_string()));
     hello.emplace("policy", sj::Value(std::move(policy)));
     sj::Value helloVal(std::move(hello));
     session->record_event("send", helloVal);
@@ -1387,11 +1510,12 @@ struct AgentTool {
     spec.summary = "Run sandboxed automation agent";
     set_tool_summary_locale(spec, "en", "Run sandboxed automation agent");
     set_tool_summary_locale(spec, "zh", "运行沙盒内的自动化 Agent");
-    spec.help = "agent run <goal...> | agent tools --json | agent monitor [session_id]";
-    set_tool_help_locale(spec, "en", "agent run <goal...> | agent tools --json | agent monitor [session_id]");
-    set_tool_help_locale(spec, "zh", "agent run <目标...> | agent tools --json | agent monitor [session_id]");
+    spec.help = "agent run <goal...> | agent saferun [-a] <goal...> | agent tools --json | agent monitor [session_id]";
+    set_tool_help_locale(spec, "en", "agent run <goal...> | agent saferun [-a] <goal...> | agent tools --json | agent monitor [session_id]");
+    set_tool_help_locale(spec, "zh", "agent run <目标...> | agent saferun [-a] <目标...> | agent tools --json | agent monitor [session_id]");
     spec.subs = {
       SubcommandSpec{"run", {}, {positional("<goal...>")}, {}, nullptr},
+      SubcommandSpec{"saferun", {OptionSpec{"-a", false}}, {positional("<goal...>")}, {}, nullptr},
       SubcommandSpec{"tools", {OptionSpec{"--json", false}}, {}, {}, nullptr},
       SubcommandSpec{"monitor", {}, {positional("[session_id]")}, {}, nullptr}
     };
@@ -1402,7 +1526,7 @@ struct AgentTool {
     const auto& tokens = request.tokens;
     if(tokens.size() < 2){
       g_parse_error_cmd = "agent";
-      return detail::text_result("usage: agent <run|tools> ...\n", 1);
+      return detail::text_result("usage: agent <run|saferun|tools|monitor> ...\n", 1);
     }
     if(tokens[1] == "tools"){
       bool jsonFlag = false;
@@ -1441,28 +1565,49 @@ struct AgentTool {
       return detail::text_result("agent monitor is not supported on this platform\n", 1);
 #endif
     }
-    if(tokens[1] != "run"){
+    ManualReviewMode reviewMode = ManualReviewMode::None;
+    size_t goalStart = std::string::npos;
+    if(tokens[1] == "run"){
+      if(tokens.size() < 3){
+        g_parse_error_cmd = "agent";
+        return detail::text_result("usage: agent run <goal...>\n", 1);
+      }
+      goalStart = 2;
+    }else if(tokens[1] == "saferun"){
+      reviewMode = ManualReviewMode::NonFsOnly;
+      size_t idx = 2;
+      if(idx < tokens.size() && tokens[idx] == "-a"){
+        reviewMode = ManualReviewMode::All;
+        ++idx;
+      }
+      if(idx >= tokens.size()){
+        g_parse_error_cmd = "agent";
+        return detail::text_result("usage: agent saferun [-a] <goal...>\n", 1);
+      }
+      goalStart = idx;
+    }else{
       g_parse_error_cmd = "agent";
-      return detail::text_result("usage: agent <run|tools> ...\n", 1);
-    }
-    if(tokens.size() < 3){
-      g_parse_error_cmd = "agent";
-      return detail::text_result("usage: agent run <goal...>\n", 1);
+      return detail::text_result("usage: agent <run|saferun|tools|monitor> ...\n", 1);
     }
     std::string goal;
-    for(size_t i = 2; i < tokens.size(); ++i){
-      if(i > 2) goal.push_back(' ');
+    for(size_t i = goalStart; i < tokens.size(); ++i){
+      if(i > goalStart) goal.push_back(' ');
       goal += tokens[i];
     }
 #ifndef _WIN32
     auto session = std::make_shared<AgentSession>();
+    session->reviewMode = reviewMode;
     if(!session->start()){
       g_parse_error_cmd = "agent";
       return detail::text_result("agent: failed to start Python helper\n", 1);
     }
     session->mark_latest_session();
     session->update_summary("Agent session is running.");
-    session->record_event("status", sj::make_object({{"state", sj::Value("dispatched")}, {"goal", sj::Value(goal)}}));
+    sj::Object status;
+    status.emplace("state", sj::Value("dispatched"));
+    status.emplace("goal", sj::Value(goal));
+    status.emplace("manual_review_mode", sj::Value(session->review_mode_string()));
+    session->record_event("status", sj::Value(std::move(status)));
     try{
       agent_indicator_set_running();
       std::thread([session, goal]{ agent_session_thread_main(session, goal); }).detach();
@@ -1481,6 +1626,9 @@ struct AgentTool {
     std::ostringstream oss;
     oss << "[agent] session " << session->sessionId << " started asynchronously." << "\n";
     oss << "use `agent monitor` to follow progress (latest session by default)." << "\n";
+    if(session->reviewMode != ManualReviewMode::None){
+      oss << "manual review: " << session->review_mode_human() << "\n";
+    }
     oss << "transcript: " << session->transcript_path() << "\n";
     oss << "summary: " << session->summary_path() << "\n";
     out.output = oss.str();
@@ -1489,6 +1637,7 @@ struct AgentTool {
     meta.emplace("transcript", sj::Value(session->transcript_path().string()));
     meta.emplace("summary", sj::Value(session->summary_path().string()));
     meta.emplace("duration_ms", sj::Value(0));
+    meta.emplace("manual_review_mode", sj::Value(session->review_mode_string()));
     out.metaJson = sj::dump(sj::Value(std::move(meta)));
     return out;
 #else

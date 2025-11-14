@@ -149,6 +149,7 @@ HOME_PATH=settings
 | 命令 | 基本用法 | 说明 |
 | --- | --- | --- |
 | `agent run` | `agent run <goal…>` | 启动内置 Python Agent 并在后台持续协作。 |
+| `agent saferun` | `agent saferun [-a] <goal…>` | 启动 Agent 并强制人工审核：默认仅针对非 `fs.*` 工具提示审核，搭配 `-a` 时扩展至所有工具。 |
 | `agent monitor` | `agent monitor [session_id]` | 监控最新或指定会话的执行轨迹，监控界面按 `q` 退出。 |
 | `agent tools` | `agent tools --json` | 导出沙盒工具的 JSON Schema，便于外部 Agent 校验契约。 |
 
