@@ -152,79 +152,68 @@ HOME_PATH=settings
 | `agent monitor` | `agent monitor [session_id]` | 监控最新或指定会话的执行轨迹，监控界面按 `q` 退出。 |
 | `agent tools` | `agent tools --json` | 导出沙盒工具的 JSON Schema，便于外部 Agent 校验契约。 |
 
-`agent run <goal…>` 会启动 `tools/agent/agent.py`（默认通过 `python3` 调用），并按照行分隔 JSON 协议与 Python 端建立会话。命令会在派发后台线程后立即返回，提示如何使用 `agent monitor` 追踪进度：
+`agent run` 会调用 `tools/agent/agent.py`（默认通过 `python3`），采用行分隔 JSON 协议创建会话：CLI 先发送 `hello`（工具目录、配额与沙盒策略）和 `start`（目标描述与工作目录），Python Agent 可多次请求工具调用，返回 `final` 后 CLI 完成收尾。所有消息和工具调用会写入 `./artifacts/<session_id>/transcript.jsonl` 与 `summary.txt`，并在 `final` 携带 `artifacts[]` 时同步落盘。
 
-1. CLI 发送 `hello`（包含工具目录、调用限制与沙盒策略）与 `start`（目标描述、当前工作目录）。
-2. Python Agent 可多次返回 `tool_call` 请求调用 `fs.read` / `fs.write` / `fs.create` / `fs.tree`，CLI 在执行前会写入 transcript 并按照限制截断 `stdout`。
-3. Agent 返回 `final` 后会话结束；若进程退出但未显式 `final`，CLI 也会优雅收尾。
+执行期间提示符前会亮起黄色 `[A]`，会话结束后变为红色提醒查看 `summary.txt` 或进入监控；若守卫等待人工确认，`[A]` 会闪烁提示尽快运行 `agent monitor`。监控界面支持 Tab 补全会话 ID，并将守卫告警以红色高亮 `y/n` 交互，退出后指示器会自动熄灭。
 
-会话的完整轨迹会落在 `./artifacts/<session_id>/transcript.jsonl` 中，格式化记录每一次消息、工具调用的入参快照、执行耗时、截断信息及哈希摘要；`summary.txt` 会随流程更新当前结论或失败原因。若 `final` 消息内含 `artifacts[]`，CLI 会在同一目录写入对应文件并在 transcript 中登记路径。你也可以通过 `agent tools --json` 获取四款沙盒工具的 JSON Schema（含参数类型、互斥约束与路径元数据），便于外部 Agent 进行契约校验。
+### 沙盒工具速查
 
-当 Agent 正在后台执行时，提示符前会亮起黄色 `[A]` 指示器；会话自然结束或失败后，它会变为红色 `[A]`，提示可以回顾 `summary.txt` 或进入监控模式。若守卫拦截了危险命令且等待人工确认，`[A]` 会改为黄色闪烁以提醒尽快进入监控确认。运行 `agent monitor [session_id]` 可实时跟踪最新或指定会话的 transcript（不带参数时使用最近一场会话），监控过程中按下 `q` 可退出，会话中出现的守卫告警会以红色高亮并提示 `y/n` 进行人工覆核；退出监控后指示器会自动熄灭。`agent monitor` 的参数同样支持 Tab 自动补全，方便快速定位最近的会话 ID。
+所有 `fs.*` 工具默认仅供 Agent 调用，不会出现在 CLI 的补全/帮助列表；如需手动运行，可执行 `setting set agent.fs_tools.expose true` 暂时开放。下表按照统一格式列出可用工具及其关键能力：
 
-### `fs.*` 工具总览
-
-| 命名空间 | 代表命令 | 主要用途 |
+| 工具 | 示例调用 | 主要用途与要点 |
 | --- | --- | --- |
-| `fs.read` / `fs.write` / `fs.create` / `fs.tree` | `fs.read <path> [...]`<br>`fs.write <path> [...]` | 受沙盒保护的文件读取、写入、创建与目录快照。 |
-| `fs.todo` | `fs.todo plan`<br>`fs.todo view` | 维护多阶段计划与依赖图，支持步骤管理、标记、历史回溯与信号记录。 |
-| `fs.ctx` | `fs.ctx scope`<br>`fs.ctx capture` | 管理编排上下文与 side context，支持固定、解锁与打包。 |
-| `fs.guard` / `fs.exec` | `fs.guard fs`<br>`fs.exec shell` | 判定潜在风险并在守卫通过后执行 shell / Python 命令。 |
-| `fs.fs` | `fs.fs snapshot`<br>`fs.fs diff` | 生成文件快照、对比差异，并暴露安全写入接口。 |
-| `fs.risk` / `fs.request` / `fs.budget` / `fs.timer` / `fs.log` / `fs.report` | `fs.risk assess`<br>`fs.report summary` 等 | 风险评估、审阅、预算计量、超时提醒与日志/报告产出。 |
+| `fs.read` | `fs.read <path> --max-bytes 4096 --with-line-numbers` | 读取受限白名单内的文本文件，支持按字节/行采样、区间读取与哈希校验。 |
+| `fs.write` | `fs.write <path> --mode overwrite --content "..." --atomic` | 以覆盖或追加方式写入文本，可选行尾转换、备份与原子落盘，返回写前/写后哈希。 |
+| `fs.create` | `fs.create <path> --content-file seed.txt --create-parents` | 在目标不存在时创建文件，支持一次性写入、父目录创建、原子写入与试运行。 |
+| `fs.tree` | `fs.tree <root> --depth 3 --format json --ext .cpp` | 生成目录快照并支持深度、后缀、忽略规则筛选，返回节点统计与截断信息。 |
+| `fs.todo plan` | `fs.todo plan --title "Refactor"` | 创建带版本号的任务计划，自动记录里程碑信息。 |
+| `fs.todo view` | `fs.todo view --active` | 查看当前计划详情，可聚焦进行中或全部步骤。 |
+| `fs.todo add` | `fs.todo add <parent> --title "Implement"` | 在计划中新增步骤，支持指定父节点与排序位置。 |
+| `fs.todo update` | `fs.todo update <step> --title "Review"` | 修改已有步骤的标题、负责人等元数据。 |
+| `fs.todo remove` | `fs.todo remove <step>` | 删除步骤并自动清理依赖引用。 |
+| `fs.todo reorder` | `fs.todo reorder <step> --before other` | 调整步骤顺序，保持拓扑关系正确。 |
+| `fs.todo dep.set` | `fs.todo dep.set <step> --depends a,b` | 重建步骤依赖列表，确保图结构与实际流程同步。 |
+| `fs.todo dep.add` | `fs.todo dep.add <step> --depends blocker` | 为指定步骤追加依赖关系。 |
+| `fs.todo dep.remove` | `fs.todo dep.remove <step> --depends blocker` | 从依赖图中移除指定边。 |
+| `fs.todo split` | `fs.todo split <step> --into a,b` | 将大型步骤拆分为多个子项并保留上下文。 |
+| `fs.todo merge` | `fs.todo merge <stepA> <stepB>` | 合并步骤并合并依赖/注释。 |
+| `fs.todo mark` | `fs.todo mark <step> --status done` | 推进状态机（如进行中、已完成），生成对应时间戳。 |
+| `fs.todo block` | `fs.todo block <step> --reason "Waiting"` | 标记阻塞原因并触发风险评估。 |
+| `fs.todo unblock` | `fs.todo unblock <step>` | 解除阻塞并恢复正常流程。 |
+| `fs.todo checklist` | `fs.todo checklist <step> --item "Review" --done true` | 维护步骤内的检查清单。 |
+| `fs.todo annotate` | `fs.todo annotate <step> --note "Need tests"` | 为步骤追加注释或补充材料引用。 |
+| `fs.todo snapshot` | `fs.todo snapshot --label nightly` | 保存计划快照以便后续比对。 |
+| `fs.todo history` | `fs.todo history --limit 20` | 查看计划变更历史。 |
+| `fs.todo undo` | `fs.todo undo` | 撤销上一条计划操作。 |
+| `fs.todo redo` | `fs.todo redo` | 重做最近一次撤销。 |
+| `fs.todo brief` | `fs.todo brief --mode mic` | 基于当前计划生成 MIC 摘要。 |
+| `fs.todo signal` | `fs.todo signal --type milestone --note "MVP"` | 记录编排信号以供指标回放。 |
+| `fs.ctx scope` | `fs.ctx scope --show` | 查看或调整当前上下文作用域。 |
+| `fs.ctx capture` | `fs.ctx capture <step>` | 捕获 side context 并关联到指定步骤。 |
+| `fs.ctx pin` | `fs.ctx pin <step>` | 固定关键上下文片段，防止被自动清理。 |
+| `fs.ctx unpin` | `fs.ctx unpin <step>` | 解除固定，允许上下文被回收。 |
+| `fs.ctx pack_for_mic` | `fs.ctx pack_for_mic --steps a,b` | 将上下文打包成 MIC 摘要输入。 |
+| `fs.ctx inject_todo` | `fs.ctx inject_todo <step>` | 将上下文绑定回计划节点，实现状态对齐。 |
+| `fs.guard fs` | `fs.guard fs --path ./dangerous` | 审核文件系统操作的安全性，必要时请求人工确认。 |
+| `fs.guard shell` | `fs.guard shell --command "rm -rf"` | 对潜在危险 shell 命令执行守卫评估。 |
+| `fs.guard net` | `fs.guard net --url https://...` | 检查网络访问是否符合策略。 |
+| `fs.exec shell` | `fs.exec shell --command "pytest"` | 在守卫通过后执行 shell 命令并捕获 stdout/stderr。 |
+| `fs.exec python` | `fs.exec python --script script.py` | 执行 Python 代码片段或脚本，返回结构化结果。 |
+| `fs.fs read` | `fs.fs read <path>` | 兼容旧版沙盒读取能力，并与新版工具共享配额。 |
+| `fs.fs write_safe` | `fs.fs write_safe <path> --content "..."` | 受守卫保护的安全写入入口。 |
+| `fs.fs snapshot` | `fs.fs snapshot --label before` | 生成当前目录快照。 |
+| `fs.fs diff` | `fs.fs diff --from before --to after` | 对比两次快照差异。 |
+| `fs.risk assess` | `fs.risk assess --step main` | 基于优先级与阻塞信息生成风险评估。 |
+| `fs.request review` | `fs.request review --step main` | 汇总高风险步骤的人工审阅包。 |
+| `fs.budget set` | `fs.budget set --tokens 5000 --minutes 20` | 设定 token/时间/请求数预算。 |
+| `fs.budget meter` | `fs.budget meter --show` | 查看预算使用情况。 |
+| `fs.timer` | `fs.timer --name delivery --minutes 30` | 注册超时提醒并在到期时提示。 |
+| `fs.log event` | `fs.log event --type note --message "Tests added"` | 记录关键事件以供后续回放。 |
+| `fs.report summary` | `fs.report summary --format markdown` | 汇总日志并生成报告或总结片段。 |
 
-所有 `fs.*` 工具默认仅供 Agent 调用，不会出现在 CLI 的补全/帮助列表中。若确实需要手动运行，可执行 `setting set agent.fs_tools.expose true` 临时暴露它们。
+所有工具均返回结构化 JSON，方便外部编排器读取元信息、处理版本冲突并生成运行日志。`fs.ctx` 系列的扩展命令（如 `fs.ctx ingest`、`fs.ctx search`）在当前模式下会返回 `not_enabled` 占位结果，保留后续扩展空间。
 
-#### 沙盒文件工具（`fs.read` / `fs.write` / `fs.create` / `fs.tree`）
-
-| 命令 | 基本用法 | 说明 |
-| --- | --- | --- |
-| `fs.read` | `fs.read <path> [--max-bytes N] [--head N\|--tail N] [...]` | 读取文本文件，可按行或按字节采样，并输出哈希值、行号等元数据。 |
-| `fs.write` | `fs.write <path> (--content TEXT \| --content-file FILE) [选项]` | 以覆盖或追加方式写入文件，支持行尾转换、备份、原子落盘与哈希比对。 |
-| `fs.create` | `fs.create <path> [--content TEXT \| --content-file FILE] [选项]` | 在文件不存在时创建新文件，可一次性写入初始内容并选择是否创建父目录。 |
-| `fs.tree` | `fs.tree <root> [--depth N] [--format json\|text] [...]` | 生成目录快照并支持按深度、后缀与忽略规则过滤，推荐以 JSON 供 Agent 使用。 |
-
-为了支持 Agent 自动执行“读—改—验”的闭环，CLI 将上述四款工具限制在沙盒内执行。它们只允许访问当前工作目录下、白名单后缀的文本资源（默认 `.py/.md/.txt/.json/.yaml/.toml/.html/.css/.js/.c/.cc/.cpp/.cxx/.h/.hh/.hpp`），所有路径在执行前都会 `realpath` 并验证是否位于沙盒根目录内。
-
-- **`fs.read`**：读取文件内容，可通过 `--max-bytes` 控制最大读取量，使用 `--head`/`--tail` 按行采样，或借助 `--offset`/`--length` 指定字节区间。`--with-line-numbers` 会为输出加上行号，`--hash-only` 则仅返回哈希摘要。执行结果的元数据会记录读取范围、哈希值、是否截断以及耗时。
-- **`fs.write`**：以最小副作用写入文本文件，支持 `--mode overwrite|append`、`--content`/`--content-file` 二选一输入、`--eol` 行尾转换、`--backup` 备份旧文件、`--atomic` 临时文件 + 重命名的原子落盘，并在元数据中给出写前/写后的哈希与写入字节数。若内容超出限制或编码不为 UTF-8，会返回统一错误码。
-- **`fs.create`**：仅在目标文件不存在时创建新文件，可一次性写入 `--content` 文本或从 `--content-file` 复制内容，并支持 `--create-parents`、`--eol`、`--atomic`、`--dry-run` 等选项。元数据会记录写入字节数、哈希值、是否使用原子写入及耗时。
-- **`fs.tree`**：生成目录快照，可通过 `--depth`、`--ext`、`--ignore-file`、`--include-hidden` 等选项筛选，并以 `--format json|text` 输出（Agent 推荐 JSON）。返回值会附带节点总数、是否截断与耗时信息。
-
-`cat` 命令现在等价于 `fs.read`，便于人工快速复核 Agent 读取到的内容。
-
-#### 计划管理（`fs.todo`）
-
-`fs.todo` 负责维护多阶段任务计划，覆盖从规划、依赖维护到状态标记的完整生命周期：
-
-- `fs.todo plan` / `fs.todo view` 用于创建并查看带版本号的计划；
-- `fs.todo add` / `fs.todo update` / `fs.todo remove` / `fs.todo reorder` 管理步骤的增删改排；
-- `fs.todo dep.set` / `fs.todo dep.add` / `fs.todo dep.remove`、`fs.todo split`、`fs.todo merge` 在图结构上维护依赖或拆分/合并大任务；
-- `fs.todo mark`、`fs.todo block`/`unblock`、`fs.todo checklist`、`fs.todo annotate`、`fs.todo snapshot` 等命令负责状态机推进、阻塞标记、检查清单与注释产物；
-- `fs.todo history` / `fs.todo undo` / `fs.todo redo` 提供计划层的历史回溯；
-- `fs.todo brief` 根据当前计划生成 MIC 摘要，`fs.todo signal` 则记录编排信号。
-
-#### 上下文管理（`fs.ctx`）
-
-`fs.ctx scope` / `fs.ctx capture` / `fs.ctx pin` / `fs.ctx unpin` / `fs.ctx pack_for_mic` / `fs.ctx inject_todo` 维护任务作用域与 side context；全量模式下的扩展命令（如 `fs.ctx ingest`、`fs.ctx search` 等）当前以占位形式返回“not_enabled”，便于后续扩展。
-
-#### 守卫与执行（`fs.guard`、`fs.exec`）
-
-`fs.guard fs` / `fs.guard shell` / `fs.guard net` 对潜在危险操作给出准入判断，`fs.exec shell` 与 `fs.exec python` 在守卫通过后实际执行命令或 Python 代码并返回结构化结果。
-
-#### 文件快照（`fs.fs`）
-
-`fs.fs read` / `fs.fs write_safe` 映射到原有沙盒读写能力，同时新增 `fs.fs snapshot` 与 `fs.fs diff` 便于执行前后比对。
-
-#### 风险、预算与报告
-
-- `fs.risk assess` 会根据步骤优先级/阻塞信息给出风险分级；
-- `fs.request review` 汇总高风险操作的审阅包；
-- `fs.budget set` / `fs.budget meter` 维护 token/时间/请求数预算；
-- `fs.timer` 注册超时提醒；
-- `fs.log event` 记录关键事件并可在 `fs.report summary` 中生成压缩总结。
-
-所有命令均返回结构化 JSON，方便外部编排器读取元信息、处理版本冲突并生成更丰富的运行日志。
+沙盒文件相关工具共享统一的访问限制：仅允许读取/写入当前工作目录内的白名单文本后缀，执行前均会进行 `realpath` 校验；`cat` 命令等价于 `fs.read`，便于人工复核 Agent 的读取结果。
 
 ## 在配置文件中接入外部接口
 
