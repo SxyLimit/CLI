@@ -2,6 +2,13 @@
 
 #include "tool_common.hpp"
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#endif
+
 namespace tool {
 
 struct Llm {
@@ -40,12 +47,53 @@ struct Llm {
         cmd += " ";
         cmd += shellEscape(args[i]);
       }
-      cmd = "MYCLI_LLM_SILENT=1 " + cmd + " > /dev/null 2>&1";
-      try{
-        std::thread([command = cmd]{ std::system(command.c_str()); }).detach();
-      }catch(const std::system_error&){
-        std::system(cmd.c_str());
+      std::string fullCommand = "MYCLI_LLM_SILENT=1 " + cmd + " > /dev/null 2>&1";
+#ifndef _WIN32
+      std::vector<std::string> argvStorage;
+      argvStorage.emplace_back("python3");
+      argvStorage.emplace_back("tools/llm.py");
+      argvStorage.emplace_back("call");
+      for(size_t i = 2; i < args.size(); ++i){
+        argvStorage.push_back(args[i]);
       }
+      auto runner = [argvStorage = std::move(argvStorage), command = fullCommand]() mutable {
+        std::vector<char*> argv;
+        argv.reserve(argvStorage.size() + 1);
+        for(auto& piece : argvStorage){
+          argv.push_back(const_cast<char*>(piece.c_str()));
+        }
+        argv.push_back(nullptr);
+        pid_t pid = fork();
+        if(pid == 0){
+          ::setenv("MYCLI_LLM_SILENT", "1", 1);
+          int devNull = ::open("/dev/null", O_WRONLY);
+          if(devNull >= 0){
+            ::dup2(devNull, STDOUT_FILENO);
+            ::dup2(devNull, STDERR_FILENO);
+            ::close(devNull);
+          }
+          ::execvp(argv[0], argv.data());
+          _exit(127);
+        }
+        if(pid < 0){
+          std::system(command.c_str());
+          return;
+        }
+        int status = 0;
+        ::waitpid(pid, &status, 0);
+      };
+      try{
+        std::thread(std::move(runner)).detach();
+      }catch(const std::system_error&){
+        std::system(fullCommand.c_str());
+      }
+#else
+      try{
+        std::thread([command = fullCommand]{ std::system(command.c_str()); }).detach();
+      }catch(const std::system_error&){
+        std::system(fullCommand.c_str());
+      }
+#endif
       llm_set_pending(true);
       return detail::text_result("[llm] request dispatched asynchronously. Use `llm recall` to view replies.\n");
     }
