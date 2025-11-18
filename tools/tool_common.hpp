@@ -73,6 +73,7 @@ inline ToolExecutionResult execute_shell(const ToolExecutionRequest& request,
     result.output = output;
     return result;
   }
+  platform::RawModeScope raw_guard;
   int rc = std::system(command.c_str());
   result.exitCode = rc;
   if(request.silent && !captureWhenSilent){

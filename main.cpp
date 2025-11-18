@@ -187,6 +187,39 @@ inline void set_env(const std::string& key, const std::string& value, bool overw
 }
 
 #endif
+
+static TermRaw* g_registered_raw_terminal = nullptr;
+static int g_raw_suspend_depth = 0;
+
+void register_raw_terminal(TermRaw* term){
+  g_registered_raw_terminal = term;
+  g_raw_suspend_depth = 0;
+}
+
+void unregister_raw_terminal(TermRaw* term){
+  if(g_registered_raw_terminal == term){
+    g_registered_raw_terminal = nullptr;
+    g_raw_suspend_depth = 0;
+  }
+}
+
+void suspend_raw_mode(){
+  if(!g_registered_raw_terminal) return;
+  if(g_raw_suspend_depth == 0){
+    g_registered_raw_terminal->disable();
+  }
+  ++g_raw_suspend_depth;
+}
+
+void resume_raw_mode(){
+  if(!g_registered_raw_terminal) return;
+  if(g_raw_suspend_depth == 0) return;
+  --g_raw_suspend_depth;
+  if(g_raw_suspend_depth == 0){
+    g_registered_raw_terminal->enable();
+  }
+}
+
 } // namespace platform
 
 // ===== Global state definitions =====
@@ -3011,6 +3044,11 @@ int main(){
   // 4) 原始模式（最小化）
   platform::ensure_virtual_terminal_output();
   platform::TermRaw term; term.enable();
+  platform::register_raw_terminal(&term);
+  struct RawTerminalRegistration {
+    platform::TermRaw* term;
+    ~RawTerminalRegistration(){ platform::unregister_raw_terminal(term); }
+  } rawTerminalRegistration{&term};
 
   std::string buf;
   size_t cursorByte = 0;
