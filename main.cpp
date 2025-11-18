@@ -36,6 +36,7 @@
 #include <limits>
 #include <utility>
 #include <atomic>
+#include <chrono>
 
 #include "globals.hpp"
 #include "tools.hpp"
@@ -208,6 +209,7 @@ static std::vector<std::string> g_command_history;
 static std::atomic<int> g_agent_running_sessions{0};
 static std::atomic<int> g_agent_pending_sessions{0};
 static std::atomic<int> g_agent_guard_alerts{0};
+static std::atomic<bool> g_agent_guard_blink_phase{false};
 static std::atomic<bool> g_agent_monitor_active{false};
 
 static void agent_indicator_refresh_state(){
@@ -220,20 +222,57 @@ static void agent_indicator_refresh_state(){
   int pending = g_agent_pending_sessions.load(std::memory_order_relaxed);
   if(guardAlerts > 0){
     state.visible = true;
-    state.bracketColor = ansi::GRAY;
-    state.textColor = monitorActive ? std::string(ansi::YELLOW)
-                                    : std::string(ansi::YELLOW) + ansi::BLINK;
+    bool blinkPhase = g_agent_guard_blink_phase.load(std::memory_order_relaxed);
+    state.textColor = blinkPhase ? std::string(ansi::YELLOW)
+                                 : std::string(ansi::GRAY);
   }else if(running > 0){
     state.visible = true;
     state.textColor = ansi::YELLOW;
   }else if(pending > 0){
     state.visible = true;
     state.textColor = ansi::RED;
+  }else if(monitorActive){
+    state.visible = true;
+    state.textColor = ansi::WHITE;
   }else{
     state.visible = false;
     state.textColor = ansi::WHITE;
   }
   update_prompt_indicator("agent", state);
+}
+
+static bool agent_indicator_tick_blink(){
+  static constexpr auto interval = std::chrono::milliseconds(500);
+  static auto lastToggle = std::chrono::steady_clock::now();
+  static int lastGuardCount = 0;
+  int guardAlerts = g_agent_guard_alerts.load(std::memory_order_relaxed);
+  if(guardAlerts <= 0){
+    bool wasActive = lastGuardCount > 0;
+    lastGuardCount = 0;
+    if(wasActive){
+      g_agent_guard_blink_phase.store(false, std::memory_order_relaxed);
+      agent_indicator_refresh_state();
+      return true;
+    }
+    return false;
+  }
+  if(lastGuardCount <= 0){
+    lastGuardCount = guardAlerts;
+    g_agent_guard_blink_phase.store(false, std::memory_order_relaxed);
+    lastToggle = std::chrono::steady_clock::now();
+    agent_indicator_refresh_state();
+    return true;
+  }
+  lastGuardCount = guardAlerts;
+  auto now = std::chrono::steady_clock::now();
+  if(now - lastToggle >= interval){
+    lastToggle = now;
+    bool next = !g_agent_guard_blink_phase.load(std::memory_order_relaxed);
+    g_agent_guard_blink_phase.store(next, std::memory_order_relaxed);
+    agent_indicator_refresh_state();
+    return true;
+  }
+  return false;
 }
 
 static void agent_indicator_decrement(std::atomic<int>& counter){
@@ -363,6 +402,7 @@ void agent_indicator_clear(){
   g_agent_pending_sessions.store(0, std::memory_order_relaxed);
   g_agent_guard_alerts.store(0, std::memory_order_relaxed);
   g_agent_monitor_active.store(false, std::memory_order_relaxed);
+  g_agent_guard_blink_phase.store(false, std::memory_order_relaxed);
   agent_indicator_refresh_state();
 }
 
@@ -389,6 +429,9 @@ void agent_indicator_guard_alert_inc(){
 
 void agent_indicator_guard_alert_dec(){
   agent_indicator_decrement(g_agent_guard_alerts);
+  if(g_agent_guard_alerts.load(std::memory_order_relaxed) <= 0){
+    g_agent_guard_blink_phase.store(false, std::memory_order_relaxed);
+  }
   agent_indicator_refresh_state();
 }
 
@@ -3163,6 +3206,9 @@ int main(){
   };
 
   while(true){
+    if(agent_indicator_tick_blink()){
+      needRender = true;
+    }
     if(needRender){
       renderFrame();
     }
