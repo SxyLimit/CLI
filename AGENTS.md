@@ -61,7 +61,8 @@ This project now uses the redesigned tool architecture. Please follow these rule
 - When you extend the settings surface, update both the CLI behaviour (including `setting get` with empty prefixes) and the README examples in the same change.
 
 ## Command helpers
-- The built-in `run` command simply shells out to whatever command follows (`run ls -al`), escaping each argument safely via `shellEscape`. Use this tool for delegating to external commands without adding a bespoke wrapper.
+- The built-in `run` command simply shells out to whatever command follows (`run ls -al`), escaping each argument safely via `shellEscape`. Use this tool for delegating to external commands without adding a bespoke wrapper. **Any time the CLI launches another process (run, config-driven tools, agent helpers, background threads, etc.) you must restore the terminal to its default cursor/rendering state first, then return to raw mode after the subprocess exits.**
+- Prefer `tool::detail::execute_shell` for all subprocesses so silent-mode capture and the raw-mode suspension stay consistent. If you ever have to call `std::system` directly (for example a detached thread), wrap it in `platform::RawModeScope`.
 
 ## File utilities
 - The built-in `cat` command (implemented in `tools/cat.hpp`) supports piping via `--pipe <command>` (data is streamed to the command's STDIN). Capture of the piped command output is not provided; consumers should redirect output within the command itself.
@@ -76,4 +77,3 @@ This project now uses the redesigned tool architecture. Please follow these rule
 
 ## Testing & style
 - Prefer returning `ToolExecutionResult` instances from tool logic rather than writing to stdout directly. If legacy behaviour requires printing, keep it inside the executor function so that silent invocations work correctly.
-- When you need to run external commands, prefer `tool::detail::execute_shell` to ensure silent-mode capture works consistently.

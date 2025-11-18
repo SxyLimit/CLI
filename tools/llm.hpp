@@ -41,10 +41,14 @@ struct Llm {
         cmd += shellEscape(args[i]);
       }
       cmd = "MYCLI_LLM_SILENT=1 " + cmd + " > /dev/null 2>&1";
+      auto dispatch = [command = cmd]{
+        platform::RawModeScope raw_guard;
+        std::system(command.c_str());
+      };
       try{
-        std::thread([command = cmd]{ std::system(command.c_str()); }).detach();
+        std::thread(dispatch).detach();
       }catch(const std::system_error&){
-        std::system(cmd.c_str());
+        dispatch();
       }
       llm_set_pending(true);
       return detail::text_result("[llm] request dispatched asynchronously. Use `llm recall` to view replies.\n");

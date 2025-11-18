@@ -19,6 +19,22 @@
 #include <iostream>
 #include <filesystem>
 
+namespace platform {
+class TermRaw;
+void register_raw_terminal(TermRaw* term);
+void unregister_raw_terminal(TermRaw* term);
+void suspend_raw_mode();
+void resume_raw_mode();
+
+class RawModeScope {
+public:
+  RawModeScope(){ suspend_raw_mode(); }
+  ~RawModeScope(){ resume_raw_mode(); }
+  RawModeScope(const RawModeScope&) = delete;
+  RawModeScope& operator=(const RawModeScope&) = delete;
+};
+}
+
 // ===== ANSI =====
 namespace ansi {
   inline constexpr const char* CLR   = "\x1b[2K\r";
