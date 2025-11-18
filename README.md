@@ -149,12 +149,15 @@ HOME_PATH=settings
 | 命令 | 基本用法 | 说明 |
 | --- | --- | --- |
 | `agent run` | `agent run <goal…>` | 启动内置 Python Agent 并在后台持续协作。 |
+| `agent saferun` | `agent saferun [-a] <todo…>` | 守卫模式运行 Agent，默认仅在调用非 `fs.*` 工具或 `fs.exec.shell` 时请求人工审核，加上 `-a` 则所有工具执行前都需审核。 |
 | `agent monitor` | `agent monitor [session_id]` | 监控最新或指定会话的执行轨迹，监控界面按 `q` 退出。 |
 | `agent tools` | `agent tools --json` | 导出沙盒工具的 JSON Schema，便于外部 Agent 校验契约。 |
 
 `agent run` 会调用 `tools/agent/agent.py`（默认通过 `python3`），采用行分隔 JSON 协议创建会话：CLI 先发送 `hello`（工具目录、配额与沙盒策略）和 `start`（目标描述与工作目录），Python Agent 可多次请求工具调用，返回 `final` 后 CLI 完成收尾。所有消息和工具调用会写入 `./artifacts/<session_id>/transcript.jsonl` 与 `summary.txt`，并在 `final` 携带 `artifacts[]` 时同步落盘。
 
-执行期间提示符前会亮起黄色 `[A]`，会话结束后变为红色提醒查看 `summary.txt` 或进入监控；若守卫等待人工确认，`[A]` 会闪烁提示尽快运行 `agent monitor`。监控界面支持 Tab 补全会话 ID，并将守卫告警以红色高亮 `y/n` 交互，退出后指示器会自动熄灭。
+`agent saferun` 复用了同一协作协议，但会在触发关键操作时暂停等待人工确认：默认情况下所有非 `fs.*` 工具以及 `fs.exec.shell` 都会先进入人工审核；添加 `-a` 后则进一步要求每一次工具调用都需被审核通过才会执行。审核过程会在 `agent monitor` 中展示并支持 `y/n` 快速批准或拒绝。
+
+执行期间提示符前会亮起黄色 `[A]`，会话结束后变为红色提醒查看 `summary.txt` 或进入监控；若守卫等待人工确认（如 `agent saferun` 触发的人工审核），`[A]` 会以黄色字体配合灰色括号闪烁提示尽快运行 `agent monitor`。监控界面支持 Tab 补全会话 ID，并根据不同的 Agent 指令（如 `fs.read`/`fs.write`/`fs.exec.shell`）以不同颜色渲染轨迹，同时将守卫告警以红色高亮 `y/n` 交互，退出后指示器会自动熄灭。
 
 ### 沙盒工具速查
 
