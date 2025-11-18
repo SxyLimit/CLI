@@ -220,6 +220,7 @@ static void agent_indicator_refresh_state(){
   int pending = g_agent_pending_sessions.load(std::memory_order_relaxed);
   if(guardAlerts > 0){
     state.visible = true;
+    state.bracketColor = ansi::GRAY;
     state.textColor = monitorActive ? std::string(ansi::YELLOW)
                                     : std::string(ansi::YELLOW) + ansi::BLINK;
   }else if(running > 0){
