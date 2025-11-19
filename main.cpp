@@ -3175,6 +3175,15 @@ int main(){
       wordSuffixVisible = wordInfo.wordAfterCursor;
     }
 
+    if(!pathError && !showInlineSuggestion &&
+       wordInfo.wordBeforeCursor.empty() && wordInfo.wordAfterCursor.empty()){
+      if(cursorSegmentIndex > 0){
+        cursorSegmentIndex -= 1;
+        auto cursorGlyphs = utf8Glyphs(segments[cursorSegmentIndex].text);
+        cursorGlyphIndex = cursorGlyphs.size();
+      }
+    }
+
     size_t anchorSegmentIndex = cursorSegmentIndex;
 
     if(!wordSuffixVisible.empty()){
