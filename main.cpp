@@ -3314,6 +3314,11 @@ int main(){
             break;
           }
         }
+        if(count > 0){
+          size_t boundary = first + count;
+          if(boundary > glyphs.size()) boundary = glyphs.size();
+          ensureCaret(i, boundary);
+        }
       }
       flushCaretIfNeeded();
       setColor(nullptr);
