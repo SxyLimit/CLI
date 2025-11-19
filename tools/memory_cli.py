@@ -9,7 +9,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 TOOLS_DIR = Path(__file__).resolve().parent
 SUPPORTED_SUFFIXES = {".md", ".txt"}
@@ -70,18 +70,16 @@ def make_relative(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
-def handle_import(args: argparse.Namespace) -> int:
+def handle_import(args: argparse.Namespace) -> Dict[str, Any]:
     root = Path(args.root).resolve()
     index = Path(args.index).resolve()
     personal_subdir = args.personal_subdir.strip("/") or "personal"
     src = Path(args.src).resolve()
     if not src.exists():
-        print(f"[memory] source not found: {src}", file=sys.stderr)
-        return 1
+        raise RuntimeError(f"source not found: {src}")
     files = discover_files(src)
     if not files:
-        print("[memory] no markdown or text files found to import", file=sys.stderr)
-        return 1
+        raise RuntimeError("no markdown or text files found to import")
     target_base = root / (personal_subdir if args.personal else "knowledge")
     category = args.category or (src.stem if src.is_dir() else "misc")
     target_base = target_base / category
@@ -102,9 +100,13 @@ def handle_import(args: argparse.Namespace) -> int:
     rc = run_builder(root, index, personal_subdir, args.lang, args.min_len, args.max_len, args.bootstrap_depth, extra)
     json_path.unlink(missing_ok=True)
     if rc != 0:
-        return rc
-    print(f"[memory] imported {len(files)} files into {target_base}")
-    return 0
+        raise RuntimeError(f"memory index builder exited with {rc}")
+    return {
+        "imported": len(files),
+        "target": make_relative(target_base, root),
+        "category": category,
+        "personal": bool(args.personal)
+    }
 
 
 def capture_editor_text() -> str:
@@ -129,7 +131,7 @@ def capture_editor_text() -> str:
     return content.strip()
 
 
-def handle_note(args: argparse.Namespace) -> int:
+def handle_note(args: argparse.Namespace) -> Dict[str, Any]:
     root = Path(args.root).resolve()
     personal_subdir = args.personal_subdir.strip("/") or "personal"
     index = Path(args.index).resolve()
@@ -139,8 +141,7 @@ def handle_note(args: argparse.Namespace) -> int:
     if args.editor:
         content = capture_editor_text()
     if not content:
-        print("[memory] note content is empty", file=sys.stderr)
-        return 1
+        raise RuntimeError("note content is empty")
     stamp = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
     counter = 1
     while True:
@@ -159,9 +160,16 @@ def handle_note(args: argparse.Namespace) -> int:
     rc = run_builder(root, index, personal_subdir, args.lang, args.min_len, args.max_len, args.bootstrap_depth, extra)
     json_path.unlink(missing_ok=True)
     if rc != 0:
-        return rc
-    print(f"[memory] created personal note {dest}")
-    return 0
+        raise RuntimeError(f"memory index builder exited with {rc}")
+    return {"path": rel_path}
+
+
+def write_report(report_path: Optional[str], payload: Dict[str, Any]) -> None:
+    if not report_path:
+        return
+    path = Path(report_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -173,6 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-len", type=int, default=50)
     parser.add_argument("--max-len", type=int, default=100)
     parser.add_argument("--bootstrap-depth", type=int, default=1)
+    parser.add_argument("--report")
     sub = parser.add_subparsers(dest="command")
 
     imp = sub.add_parser("import")
@@ -192,12 +201,24 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    if args.command == "import":
-        return handle_import(args)
-    if args.command == "note":
-        return handle_note(args)
-    parser.print_help()
-    return 1
+    try:
+        if args.command == "import":
+            data = handle_import(args)
+            write_report(args.report, {"status": "ok", **data})
+            return 0
+        if args.command == "note":
+            data = handle_note(args)
+            write_report(args.report, {"status": "ok", **data})
+            return 0
+        parser.print_help()
+        write_report(args.report, {"status": "error", "error": "missing command"})
+        return 1
+    except KeyboardInterrupt:
+        write_report(args.report, {"status": "error", "error": "operation cancelled"})
+        return 1
+    except Exception as exc:  # pylint: disable=broad-except
+        write_report(args.report, {"status": "error", "error": str(exc)})
+        return 1
 
 
 if __name__ == "__main__":

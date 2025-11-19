@@ -2,6 +2,7 @@
 
 #include "tool_common.hpp"
 #include "../utils/memory.hpp"
+#include "../utils/json.hpp"
 
 #include <chrono>
 #include <random>
@@ -45,6 +46,8 @@ private:
                                             const std::optional<std::string>& langOverride = std::nullopt);
   static std::string escape_json(const std::string& value);
   static std::optional<std::string> normalize_path_arg(const Paths& paths, const std::string& raw);
+  static std::filesystem::path make_report_path(const Paths& paths);
+  static std::optional<sj::Value> load_report_json(const std::filesystem::path& path);
 };
 
 inline ToolSpec MemoryTool::ui(){
@@ -216,6 +219,39 @@ inline ToolExecutionResult MemoryTool::run_python_cli(const ToolExecutionRequest
   return tool::detail::execute_shell(request, cmd);
 }
 
+inline std::filesystem::path MemoryTool::make_report_path(const Paths& paths){
+  std::filesystem::path base;
+  try{
+    base = std::filesystem::temp_directory_path();
+  }catch(...){
+    base = paths.root;
+  }
+  auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  for(int i = 0; i < 5; ++i){
+    auto candidate = base / ("memory_report_" + std::to_string(stamp + i) + ".json");
+    if(!std::filesystem::exists(candidate)){
+      return candidate;
+    }
+  }
+  return base / ("memory_report_" + std::to_string(stamp) + ".json");
+}
+
+inline std::optional<sj::Value> MemoryTool::load_report_json(const std::filesystem::path& path){
+  if(path.empty()) return std::nullopt;
+  std::ifstream input(path);
+  if(!input) return std::nullopt;
+  std::ostringstream oss;
+  oss << input.rdbuf();
+  auto text = oss.str();
+  if(text.empty()) return std::nullopt;
+  try{
+    sj::Parser parser(text);
+    return parser.parse();
+  }catch(...){
+    return std::nullopt;
+  }
+}
+
 inline ToolExecutionResult MemoryTool::run_import(const ToolExecutionRequest& request, const Paths& paths, const std::vector<std::string>& args){
   std::string err;
   if(!ensure_enabled(err)){
@@ -249,7 +285,54 @@ inline ToolExecutionResult MemoryTool::run_import(const ToolExecutionRequest& re
     g_parse_error_cmd = "memory";
     return tool::detail::text_result("usage: memory import <path> [options]\n", 1);
   }
-  return run_python_cli(request, paths, "import", passArgs, langOverride);
+  auto reportPath = make_report_path(paths);
+  passArgs.push_back("--report");
+  passArgs.push_back(reportPath.string());
+  auto execResult = run_python_cli(request, paths, "import", passArgs, langOverride);
+  auto report = load_report_json(reportPath);
+  std::error_code ec;
+  std::filesystem::remove(reportPath, ec);
+  if(execResult.exitCode != 0){
+    std::string message = "memory import failed";
+    if(report && report->isObject()){
+      const auto* status = report->find("status");
+      if(status && status->isString() && status->asString() == "error"){
+        if(const auto* err = report->find("error"); err && err->isString()){
+          message += ": " + err->asString();
+        }
+      }
+    }
+    message += "\n";
+    int exitCode = execResult.exitCode == 0 ? 1 : execResult.exitCode;
+    return tool::detail::text_result(message, exitCode);
+  }
+  long long imported = 0;
+  std::string target;
+  bool personal = false;
+  if(report && report->isObject()){
+    const auto* status = report->find("status");
+    if(status && status->isString() && status->asString() == "ok"){
+      if(const auto* countVal = report->find("imported"); countVal){
+        imported = countVal->asInteger(0);
+      }
+      if(const auto* targetVal = report->find("target"); targetVal && targetVal->isString()){
+        target = targetVal->asString();
+      }
+      if(const auto* personalVal = report->find("personal"); personalVal){
+        personal = personalVal->asBool(false);
+      }
+    }
+  }
+  std::ostringstream oss;
+  oss << "[memory] imported " << imported << (imported == 1 ? " file" : " files");
+  if(!target.empty()){
+    oss << " into " << target;
+  }
+  if(personal){
+    oss << " (personal)";
+  }
+  oss << "\n";
+  return tool::detail::text_result(oss.str());
 }
 
 inline ToolExecutionResult MemoryTool::run_note(const ToolExecutionRequest& request, const Paths& paths, const std::vector<std::string>& args){
@@ -288,7 +371,41 @@ inline ToolExecutionResult MemoryTool::run_note(const ToolExecutionRequest& requ
     g_parse_error_cmd = "memory";
     return tool::detail::text_result("usage: memory note <text> | memory note -e\n", 1);
   }
-  return run_python_cli(request, paths, "note", passArgs, langOverride);
+  auto reportPath = make_report_path(paths);
+  passArgs.push_back("--report");
+  passArgs.push_back(reportPath.string());
+  auto execResult = run_python_cli(request, paths, "note", passArgs, langOverride);
+  auto report = load_report_json(reportPath);
+  std::error_code ec;
+  std::filesystem::remove(reportPath, ec);
+  if(execResult.exitCode != 0){
+    std::string message = "memory note failed";
+    if(report && report->isObject()){
+      const auto* status = report->find("status");
+      if(status && status->isString() && status->asString() == "error"){
+        if(const auto* err = report->find("error"); err && err->isString()){
+          message += ": " + err->asString();
+        }
+      }
+    }
+    message += "\n";
+    int exitCode = execResult.exitCode == 0 ? 1 : execResult.exitCode;
+    return tool::detail::text_result(message, exitCode);
+  }
+  std::string notePath;
+  if(report && report->isObject()){
+    const auto* status = report->find("status");
+    if(status && status->isString() && status->asString() == "ok"){
+      if(const auto* pathVal = report->find("path"); pathVal && pathVal->isString()){
+        notePath = pathVal->asString();
+      }
+    }
+  }
+  if(notePath.empty()){
+    notePath = "personal/notes";
+  }
+  std::string message = "[memory] created personal note " + notePath + "\n";
+  return tool::detail::text_result(message);
 }
 
 inline ToolExecutionResult MemoryTool::run_list(const Paths& paths, const std::vector<std::string>& args){
