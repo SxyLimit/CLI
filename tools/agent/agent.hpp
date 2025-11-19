@@ -9,6 +9,7 @@
 #include "fs_exec.hpp"
 #include "../../utils/agent_state.hpp"
 #include "../../utils/json.hpp"
+#include "../../utils/memory.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -76,6 +77,51 @@ inline std::string random_guard_prompt_id(){
 
 static std::mutex g_guard_prompt_mutex;
 static std::unordered_map<std::string, std::deque<std::shared_ptr<GuardPromptState>>> g_guard_prompts_by_session;
+
+inline sj::Value build_memory_bootstrap_value(){
+  sj::Object info;
+  if(!memory_system_enabled()){
+    info.emplace("enabled", sj::Value(false));
+    return sj::Value(std::move(info));
+  }
+  info.emplace("enabled", sj::Value(true));
+  info.emplace("root", sj::Value(memory_root_path().string()));
+  info.emplace("index_file", sj::Value(memory_index_path().string()));
+  MemoryIndex index;
+  std::string error;
+  if(!index.load(memory_index_path(), error)){
+    return sj::Value(std::move(info));
+  }
+  sj::Object bootstrap;
+  if(const MemoryNode* root = index.find("")){
+    bootstrap.emplace("root_summary", sj::Value(root->summary));
+  }
+  sj::Array categories;
+  auto depth1 = index.nodesByDepth(1);
+  for(const MemoryNode* node : depth1){
+    if(!node || !node->isDir() || !node->eagerExpose) continue;
+    sj::Object cat;
+    cat.emplace("path", sj::Value(node->relPath));
+    cat.emplace("summary", sj::Value(node->summary));
+    cat.emplace("is_personal", sj::Value(node->bucket == "personal"));
+    sj::Array files;
+    auto children = index.childrenOf(node->relPath);
+    for(const MemoryNode* child : children){
+      if(!child || !child->isFile() || !child->eagerExpose) continue;
+      sj::Object file;
+      file.emplace("path", sj::Value(child->relPath));
+      file.emplace("title", sj::Value(child->title));
+      file.emplace("summary", sj::Value(child->summary));
+      file.emplace("depth", sj::Value(child->depth));
+      files.emplace_back(sj::Value(std::move(file)));
+    }
+    cat.emplace("files", sj::Value(std::move(files)));
+    categories.emplace_back(sj::Value(std::move(cat)));
+  }
+  bootstrap.emplace("categories", sj::Value(std::move(categories)));
+  info.emplace("bootstrap", sj::Value(std::move(bootstrap)));
+  return sj::Value(std::move(info));
+}
 
 inline std::shared_ptr<GuardPromptState> register_guard_prompt(const std::string& sessionId,
                                                               const std::string& command,
@@ -826,10 +872,31 @@ inline std::optional<std::pair<std::string, std::filesystem::path>> load_latest_
   return std::make_pair(sessionId, transcriptPath.lexically_normal());
 }
 
+inline size_t agent_utf8_char_length(unsigned char lead){
+  if((lead & 0x80) == 0) return 1;
+  if((lead & 0xE0) == 0xC0) return 2;
+  if((lead & 0xF0) == 0xE0) return 3;
+  if((lead & 0xF8) == 0xF0) return 4;
+  return 1;
+}
+
+inline std::string agent_utf8_prefix(const std::string& text, size_t maxBytes){
+  if(text.size() <= maxBytes) return text;
+  size_t i = 0;
+  while(i < text.size()){
+    size_t len = agent_utf8_char_length(static_cast<unsigned char>(text[i]));
+    if(i + len > maxBytes) break;
+    i += len;
+  }
+  return text.substr(0, i);
+}
+
 inline std::string truncate_summary(const std::string& text, size_t limit){
   if(text.size() <= limit) return text;
-  if(limit <= 3) return text.substr(0, limit);
-  return text.substr(0, limit - 3) + "...";
+  if(limit == 0) return std::string();
+  if(limit <= 3) return agent_utf8_prefix(text, limit);
+  std::string head = agent_utf8_prefix(text, limit - 3);
+  return head + "...";
 }
 
 struct AgentSessionCompletionEntry {
@@ -1376,6 +1443,8 @@ inline void agent_session_thread_main(std::shared_ptr<AgentSession> session, std
     hello.emplace("type", sj::Value("hello"));
     hello.emplace("version", sj::Value("1.0"));
     hello.emplace("tool_catalog", catalog);
+    bool memoryEnabled = memory_system_enabled();
+    hello.emplace("memory", build_memory_bootstrap_value());
     sj::Object limits;
     limits.emplace("stdout_bytes", sj::Value(static_cast<long long>(session->stdoutLimit)));
     limits.emplace("tool_timeout_ms", sj::Value(static_cast<long long>(session->cfg.toolTimeoutMs)));
@@ -1387,6 +1456,11 @@ inline void agent_session_thread_main(std::shared_ptr<AgentSession> session, std
     allowed.push_back(sj::Value("fs.create"));
     allowed.push_back(sj::Value("fs.tree"));
     allowed.push_back(sj::Value("fs.exec.shell"));
+    if(memoryEnabled){
+      allowed.push_back(sj::Value("memory.list"));
+      allowed.push_back(sj::Value("memory.search"));
+      allowed.push_back(sj::Value("memory.read"));
+    }
     policy.emplace("allowed_tools", sj::Value(std::move(allowed)));
     policy.emplace("sandbox_root", sj::Value(session->cfg.sandboxRoot.string()));
     auto reviewLabel = session->manual_review_policy_name();

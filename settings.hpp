@@ -53,6 +53,14 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"agent.fs_tools.expose", {SettingValueKind::Boolean, {"false", "true"}}},
     {"home.path", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
     {"history.recent_limit", {SettingValueKind::String, {}}},
+    {"memory.enabled", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"memory.root", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
+    {"memory.index_file", {SettingValueKind::String, {}, true, PathKind::File, {".jsonl"}, false}},
+    {"memory.personal_subdir", {SettingValueKind::String, {}}},
+    {"memory.summary.lang", {SettingValueKind::String, {}}},
+    {"memory.summary.min_len", {SettingValueKind::String, {}}},
+    {"memory.summary.max_len", {SettingValueKind::String, {}}},
+    {"memory.max_bootstrap_depth", {SettingValueKind::String, {}}},
   };
   return infos;
 }
@@ -186,6 +194,16 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
         out = {"20", "30", "50", "60"};
       }else if(key=="history.recent_limit"){
         out = {"5", "10", "20", "50"};
+      }else if(key=="memory.summary.lang"){
+        const auto& langs = settings_known_languages();
+        out.assign(langs.begin(), langs.end());
+        if(std::find(out.begin(), out.end(), std::string("auto")) == out.end()){
+          out.push_back("auto");
+        }
+      }else if(key=="memory.summary.min_len" || key=="memory.summary.max_len"){
+        out = {"50", "80", "100"};
+      }else if(key=="memory.max_bootstrap_depth"){
+        out = {"0", "1", "2", "3"};
       }
       break;
   }
@@ -281,9 +299,48 @@ inline void load_settings(const std::string& path){
           history_apply_limit();
         }catch(...){
         }
+      }else if(key=="memory.enabled"){
+        bool b; if(parseBool(val, b)) g_settings.memory.enabled = b;
+      }else if(key=="memory.root"){
+        g_settings.memory.root = val;
+      }else if(key=="memory.index_file"){
+        g_settings.memory.indexFile = val;
+      }else if(key=="memory.personal_subdir"){
+        g_settings.memory.personalSubdir = val.empty()? "personal" : val;
+      }else if(key=="memory.summary.lang"){
+        if(val.empty() || val == "auto"){
+          g_settings.memory.summaryLanguage.clear();
+        }else{
+          g_settings.memory.summaryLanguage = val;
+          settings_register_language(val);
+        }
+      }else if(key=="memory.summary.min_len"){
+        try{
+          int v = std::stoi(val);
+          if(v > 0) g_settings.memory.summaryMinLen = v;
+        }catch(...){
+        }
+      }else if(key=="memory.summary.max_len"){
+        try{
+          int v = std::stoi(val);
+          if(v > 0) g_settings.memory.summaryMaxLen = v;
+        }catch(...){
+        }
+      }else if(key=="memory.max_bootstrap_depth"){
+        try{
+          int v = std::stoi(val);
+          if(v >= 0) g_settings.memory.maxBootstrapDepth = v;
+        }catch(...){
+        }
       }
     }
   }
+
+  if(g_settings.memory.personalSubdir.empty()) g_settings.memory.personalSubdir = "personal";
+  if(g_settings.memory.summaryMinLen <= 0) g_settings.memory.summaryMinLen = 50;
+  if(g_settings.memory.summaryMaxLen <= 0) g_settings.memory.summaryMaxLen = 100;
+  if(g_settings.memory.summaryMaxLen < g_settings.memory.summaryMinLen) g_settings.memory.summaryMaxLen = g_settings.memory.summaryMinLen;
+  if(g_settings.memory.maxBootstrapDepth < 0) g_settings.memory.maxBootstrapDepth = 1;
 
   if(desiredHome && *desiredHome != g_settings.configHome){
     std::string err;
@@ -315,6 +372,14 @@ inline void save_settings(const std::string& path){
   out << "prompt.input_ellipsis.right_width=" << g_settings.promptInputEllipsisRightWidth << "\n";
   out << "history.recent_limit=" << g_settings.historyRecentLimit << "\n";
   out << "agent.fs_tools.expose=" << (g_settings.agentExposeFsTools ? "true" : "false") << "\n";
+  out << "memory.enabled=" << (g_settings.memory.enabled ? "true" : "false") << "\n";
+  out << "memory.root=" << (g_settings.memory.root.empty()? memory_root_path().string() : g_settings.memory.root) << "\n";
+  out << "memory.index_file=" << (g_settings.memory.indexFile.empty()? memory_index_path().string() : g_settings.memory.indexFile) << "\n";
+  out << "memory.personal_subdir=" << (g_settings.memory.personalSubdir.empty()? "personal" : g_settings.memory.personalSubdir) << "\n";
+  out << "memory.summary.lang=" << (g_settings.memory.summaryLanguage.empty()? "auto" : g_settings.memory.summaryLanguage) << "\n";
+  out << "memory.summary.min_len=" << g_settings.memory.summaryMinLen << "\n";
+  out << "memory.summary.max_len=" << g_settings.memory.summaryMaxLen << "\n";
+  out << "memory.max_bootstrap_depth=" << g_settings.memory.maxBootstrapDepth << "\n";
   auto pathForTheme = [&](const std::string& theme) -> std::string {
     auto it = g_settings.promptThemeArtPaths.find(theme);
     if(it == g_settings.promptThemeArtPaths.end()) return "";
@@ -375,6 +440,38 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="agent.fs_tools.expose"){
     value = g_settings.agentExposeFsTools ? "true" : "false";
+    return true;
+  }
+  if(key=="memory.enabled"){
+    value = g_settings.memory.enabled ? "true" : "false";
+    return true;
+  }
+  if(key=="memory.root"){
+    value = g_settings.memory.root.empty()? memory_root_path().string() : g_settings.memory.root;
+    return true;
+  }
+  if(key=="memory.index_file"){
+    value = g_settings.memory.indexFile.empty()? memory_index_path().string() : g_settings.memory.indexFile;
+    return true;
+  }
+  if(key=="memory.personal_subdir"){
+    value = g_settings.memory.personalSubdir.empty()? "personal" : g_settings.memory.personalSubdir;
+    return true;
+  }
+  if(key=="memory.summary.lang"){
+    value = memory_summary_language();
+    return true;
+  }
+  if(key=="memory.summary.min_len"){
+    value = std::to_string(g_settings.memory.summaryMinLen);
+    return true;
+  }
+  if(key=="memory.summary.max_len"){
+    value = std::to_string(g_settings.memory.summaryMaxLen);
+    return true;
+  }
+  if(key=="memory.max_bootstrap_depth"){
+    value = std::to_string(g_settings.memory.maxBootstrapDepth);
     return true;
   }
   if(key=="prompt.theme_art_path"){
@@ -524,6 +621,110 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
       return false;
     }
     g_settings.agentExposeFsTools = b;
+    return true;
+  }
+  if(key=="memory.enabled"){
+    bool b;
+    if(!parseBool(value, b)){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.enabled = b;
+    return true;
+  }
+  if(key=="memory.root"){
+    g_settings.memory.root = value;
+    return true;
+  }
+  if(key=="memory.index_file"){
+    if(!value.empty() && !value_matches_allowed_extensions(settings_key_info(key), value)){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.indexFile = value;
+    return true;
+  }
+  if(key=="memory.personal_subdir"){
+    if(value.empty()){
+      error = "invalid_value";
+      return false;
+    }
+    std::filesystem::path rel(value);
+    if(rel.is_absolute()){
+      error = "invalid_value";
+      return false;
+    }
+    for(const auto& part : rel){
+      if(part == ".." || part == "."){
+        error = "invalid_value";
+        return false;
+      }
+    }
+    g_settings.memory.personalSubdir = value;
+    return true;
+  }
+  if(key=="memory.summary.lang"){
+    if(value.empty()){
+      error = "invalid_value";
+      return false;
+    }
+    if(value == "auto"){
+      g_settings.memory.summaryLanguage.clear();
+    }else{
+      g_settings.memory.summaryLanguage = value;
+      settings_register_language(value);
+    }
+    return true;
+  }
+  if(key=="memory.summary.min_len"){
+    int v = 0;
+    try{
+      size_t idx = 0;
+      v = std::stoi(value, &idx);
+      if(idx != value.size()) throw std::invalid_argument("extra");
+    }catch(...){
+      error = "invalid_value";
+      return false;
+    }
+    if(v <= 0 || v > g_settings.memory.summaryMaxLen){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.summaryMinLen = v;
+    return true;
+  }
+  if(key=="memory.summary.max_len"){
+    int v = 0;
+    try{
+      size_t idx = 0;
+      v = std::stoi(value, &idx);
+      if(idx != value.size()) throw std::invalid_argument("extra");
+    }catch(...){
+      error = "invalid_value";
+      return false;
+    }
+    if(v <= 0 || v < g_settings.memory.summaryMinLen){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.summaryMaxLen = v;
+    return true;
+  }
+  if(key=="memory.max_bootstrap_depth"){
+    int v = 0;
+    try{
+      size_t idx = 0;
+      v = std::stoi(value, &idx);
+      if(idx != value.size()) throw std::invalid_argument("extra");
+    }catch(...){
+      error = "invalid_value";
+      return false;
+    }
+    if(v < 0){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.maxBootstrapDepth = v;
     return true;
   }
   if(key=="prompt.theme_art_path"){
