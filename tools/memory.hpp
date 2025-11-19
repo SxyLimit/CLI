@@ -5,7 +5,6 @@
 #include "../utils/json.hpp"
 
 #include <chrono>
-#include <random>
 #include <sstream>
 #include <map>
 #include <fstream>
@@ -13,6 +12,11 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <cstdlib>
+#include <ctime>
+#include <iomanip>
+#include <cctype>
+#include <algorithm>
 
 namespace tool {
 
@@ -38,16 +42,34 @@ private:
   static ToolExecutionResult run_stats(const Paths& paths);
   static ToolExecutionResult run_note(const ToolExecutionRequest& request, const Paths& paths, const std::vector<std::string>& args);
   static ToolExecutionResult run_query(const ToolExecutionRequest& request, const Paths& paths, const std::vector<std::string>& args);
-  static ToolExecutionResult run_index_builder(const ToolExecutionRequest& request, const Paths& paths, const std::vector<std::string>& extraArgs = {});
-  static ToolExecutionResult run_python_cli(const ToolExecutionRequest& request,
-                                            const Paths& paths,
-                                            const std::string& subcommand,
-                                            const std::vector<std::string>& passArgs,
-                                            const std::optional<std::string>& langOverride = std::nullopt);
+  static ToolExecutionResult run_index_builder(const ToolExecutionRequest& request,
+                                               const Paths& paths,
+                                               const std::vector<std::string>& extraArgs = {},
+                                               const std::optional<std::string>& langOverride = std::nullopt);
   static std::string escape_json(const std::string& value);
   static std::optional<std::string> normalize_path_arg(const Paths& paths, const std::string& raw);
-  static std::filesystem::path make_report_path(const Paths& paths);
-  static std::optional<sj::Value> load_report_json(const std::filesystem::path& path);
+  struct OverrideEntry {
+    std::string relPath;
+    std::string sourcePath;
+    std::string importMode;
+  };
+  static std::filesystem::path make_temp_path(const Paths& paths, const std::string& prefix, const std::string& suffix);
+  static bool is_supported_file(const std::filesystem::path& path);
+  static std::vector<std::filesystem::path> discover_supported_files(const std::filesystem::path& source);
+  static bool apply_copy_mode(const std::filesystem::path& src,
+                              const std::filesystem::path& dest,
+                              const std::string& mode,
+                              std::string& error);
+  static bool write_overrides_file(const Paths& paths,
+                                   const std::vector<OverrideEntry>& overrides,
+                                   std::filesystem::path& outPath,
+                                   std::string& error);
+  static std::string trim(const std::string& value);
+  static bool capture_note_via_editor(const ToolExecutionRequest& request,
+                                      const Paths& paths,
+                                      std::string& content,
+                                      std::string& error);
+  static std::string current_utc_stamp();
 };
 
 inline ToolSpec MemoryTool::ui(){
@@ -197,61 +219,6 @@ inline ToolExecutionResult MemoryTool::run_init(const ToolExecutionRequest& requ
   return tool::detail::text_result(oss.str());
 }
 
-inline ToolExecutionResult MemoryTool::run_python_cli(const ToolExecutionRequest& request,
-                                                      const Paths& paths,
-                                                      const std::string& subcommand,
-                                                      const std::vector<std::string>& passArgs,
-                                                      const std::optional<std::string>& langOverride){
-  std::string cmd = "python3 tools/memory_cli.py";
-  cmd += " --root " + shellEscape(paths.root.string());
-  cmd += " --index " + shellEscape(paths.index.string());
-  cmd += " --personal-subdir " + shellEscape(g_settings.memory.personalSubdir);
-  std::string lang = langOverride.has_value()? *langOverride : memory_summary_language();
-  cmd += " --lang " + shellEscape(lang);
-  cmd += " --min-len " + std::to_string(g_settings.memory.summaryMinLen);
-  cmd += " --max-len " + std::to_string(g_settings.memory.summaryMaxLen);
-  cmd += " --bootstrap-depth " + std::to_string(g_settings.memory.maxBootstrapDepth);
-  cmd += " " + shellEscape(subcommand);
-  for(const auto& token : passArgs){
-    cmd += " ";
-    cmd += shellEscape(token);
-  }
-  return tool::detail::execute_shell(request, cmd);
-}
-
-inline std::filesystem::path MemoryTool::make_report_path(const Paths& paths){
-  std::filesystem::path base;
-  try{
-    base = std::filesystem::temp_directory_path();
-  }catch(...){
-    base = paths.root;
-  }
-  auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-  for(int i = 0; i < 5; ++i){
-    auto candidate = base / ("memory_report_" + std::to_string(stamp + i) + ".json");
-    if(!std::filesystem::exists(candidate)){
-      return candidate;
-    }
-  }
-  return base / ("memory_report_" + std::to_string(stamp) + ".json");
-}
-
-inline std::optional<sj::Value> MemoryTool::load_report_json(const std::filesystem::path& path){
-  if(path.empty()) return std::nullopt;
-  std::ifstream input(path);
-  if(!input) return std::nullopt;
-  std::ostringstream oss;
-  oss << input.rdbuf();
-  auto text = oss.str();
-  if(text.empty()) return std::nullopt;
-  try{
-    sj::Parser parser(text);
-    return parser.parse();
-  }catch(...){
-    return std::nullopt;
-  }
-}
-
 inline ToolExecutionResult MemoryTool::run_import(const ToolExecutionRequest& request, const Paths& paths, const std::vector<std::string>& args){
   std::string err;
   if(!ensure_enabled(err)){
@@ -262,13 +229,41 @@ inline ToolExecutionResult MemoryTool::run_import(const ToolExecutionRequest& re
     g_parse_error_cmd = "memory";
     return tool::detail::text_result("usage: memory import <path> [options]\n", 1);
   }
-  std::vector<std::string> passArgs;
   std::optional<std::string> langOverride;
   bool literal = false;
+  bool personal = false;
+  bool force = false;
+  std::string mode = "copy";
+  std::string category;
+  std::optional<std::string> sourcePathArg;
   for(size_t i = 2; i < args.size(); ++i){
     const std::string& tok = args[i];
     if(!literal && tok == "--"){
       literal = true;
+      continue;
+    }
+    if(!literal && tok == "--personal"){
+      personal = true;
+      continue;
+    }
+    if(!literal && tok == "--category"){
+      if(i + 1 >= args.size()){
+        g_parse_error_cmd = "memory";
+        return tool::detail::text_result("memory import: --category requires a value\n", 1);
+      }
+      category = args[++i];
+      continue;
+    }
+    if(!literal && tok == "--mode"){
+      if(i + 1 >= args.size()){
+        g_parse_error_cmd = "memory";
+        return tool::detail::text_result("memory import: --mode requires a value\n", 1);
+      }
+      mode = args[++i];
+      if(mode != "copy" && mode != "link" && mode != "mirror"){
+        g_parse_error_cmd = "memory";
+        return tool::detail::text_result("memory import: --mode must be copy, link, or mirror\n", 1);
+      }
       continue;
     }
     if(!literal && tok == "--lang"){
@@ -279,55 +274,115 @@ inline ToolExecutionResult MemoryTool::run_import(const ToolExecutionRequest& re
       langOverride = args[++i];
       continue;
     }
-    passArgs.push_back(tok);
+    if(!literal && tok == "--force"){
+      force = true;
+      continue;
+    }
+    if(!sourcePathArg){
+      sourcePathArg = tok;
+    }else{
+      g_parse_error_cmd = "memory";
+      return tool::detail::text_result("memory import: only one source path is supported\n", 1);
+    }
   }
-  if(passArgs.empty()){
+  if(!sourcePathArg){
     g_parse_error_cmd = "memory";
     return tool::detail::text_result("usage: memory import <path> [options]\n", 1);
   }
-  auto reportPath = make_report_path(paths);
-  passArgs.push_back("--report");
-  passArgs.push_back(reportPath.string());
-  auto execResult = run_python_cli(request, paths, "import", passArgs, langOverride);
-  auto report = load_report_json(reportPath);
+  std::filesystem::path sourcePath(*sourcePathArg);
   std::error_code ec;
-  std::filesystem::remove(reportPath, ec);
-  if(execResult.exitCode != 0){
-    std::string message = "memory import failed";
-    if(report && report->isObject()){
-      const auto* status = report->find("status");
-      if(status && status->isString() && status->asString() == "error"){
-        if(const auto* err = report->find("error"); err && err->isString()){
-          message += ": " + err->asString();
-        }
-      }
-    }
-    message += "\n";
-    int exitCode = execResult.exitCode == 0 ? 1 : execResult.exitCode;
-    return tool::detail::text_result(message, exitCode);
+  sourcePath = std::filesystem::weakly_canonical(sourcePath, ec);
+  if(ec) sourcePath = std::filesystem::absolute(std::filesystem::path(*sourcePathArg), ec);
+  if(ec) sourcePath = std::filesystem::path(*sourcePathArg);
+  if(!std::filesystem::exists(sourcePath)){
+    g_parse_error_cmd = "memory";
+    return tool::detail::text_result("memory import: source not found\n", 1);
   }
-  long long imported = 0;
-  std::string target;
-  bool personal = false;
-  if(report && report->isObject()){
-    const auto* status = report->find("status");
-    if(status && status->isString() && status->asString() == "ok"){
-      if(const auto* countVal = report->find("imported"); countVal){
-        imported = countVal->asInteger(0);
-      }
-      if(const auto* targetVal = report->find("target"); targetVal && targetVal->isString()){
-        target = targetVal->asString();
-      }
-      if(const auto* personalVal = report->find("personal"); personalVal){
-        personal = personalVal->asBool(false);
-      }
+  auto files = discover_supported_files(sourcePath);
+  if(files.empty()){
+    g_parse_error_cmd = "memory";
+    return tool::detail::text_result("memory import: no markdown or text files found\n", 1);
+  }
+  bool sourceIsDir = std::filesystem::is_directory(sourcePath);
+  std::string effectiveCategory = category;
+  if(effectiveCategory.empty()){
+    if(sourceIsDir){
+      effectiveCategory = sourcePath.filename().string();
+      if(effectiveCategory.empty()) effectiveCategory = "import";
+    }else{
+      effectiveCategory = "misc";
     }
   }
+  std::filesystem::path categoryPath(effectiveCategory);
+  categoryPath = categoryPath.lexically_normal();
+  auto hasParentRef = [](const std::filesystem::path& p){
+    for(const auto& part : p){
+      if(part == "..") return true;
+    }
+    return false;
+  };
+  if(categoryPath.is_absolute() || hasParentRef(categoryPath)){
+    g_parse_error_cmd = "memory";
+    return tool::detail::text_result("memory import: category must be a relative path without ..\n", 1);
+  }
+  std::filesystem::path base = personal ? paths.personal : (paths.root / "knowledge");
+  std::filesystem::path targetBase = categoryPath.empty() ? base : (base / categoryPath);
+  std::filesystem::create_directories(targetBase, ec);
+  if(ec){
+    g_parse_error_cmd = "memory";
+    return tool::detail::text_result("memory import: failed to prepare target directory\n", 1);
+  }
+  std::sort(files.begin(), files.end());
+  std::vector<OverrideEntry> overrides;
+  overrides.reserve(files.size());
+  size_t imported = 0;
+  for(const auto& file : files){
+    std::filesystem::path relativeInside;
+    if(sourceIsDir){
+      relativeInside = std::filesystem::relative(file, sourcePath, ec);
+      if(ec){
+        relativeInside.clear();
+      }
+    }
+    if(relativeInside.empty()){
+      relativeInside = file.filename();
+    }
+    std::filesystem::path destination = targetBase / relativeInside;
+    std::string copyError;
+    if(!apply_copy_mode(file, destination, mode, copyError)){
+      g_parse_error_cmd = "memory";
+      return tool::detail::text_result("memory import: " + copyError + "\n", 1);
+    }
+    auto rel = std::filesystem::relative(destination, paths.root, ec);
+    std::string relPath = ec ? destination.lexically_normal().generic_string() : rel.generic_string();
+    ec.clear();
+    auto absSource = std::filesystem::absolute(file, ec);
+    std::string sourceString = ec ? file.lexically_normal().generic_string() : absSource.generic_string();
+    overrides.push_back({relPath, sourceString, mode});
+    ++imported;
+  }
+  std::filesystem::path overridesPath;
+  std::string overridesError;
+  if(!write_overrides_file(paths, overrides, overridesPath, overridesError)){
+    g_parse_error_cmd = "memory";
+    return tool::detail::text_result("memory import: " + overridesError + "\n", 1);
+  }
+  std::vector<std::string> builderArgs;
+  if(force) builderArgs.push_back("--force");
+  if(!overridesPath.empty()){
+    builderArgs.push_back("--overrides");
+    builderArgs.push_back(overridesPath.string());
+  }
+  auto builderResult = run_index_builder(request, paths, builderArgs, langOverride);
+  std::filesystem::remove(overridesPath, ec);
+  if(builderResult.exitCode != 0){
+    g_parse_error_cmd = "memory";
+    return builderResult;
+  }
+  auto targetRel = std::filesystem::relative(targetBase, paths.root, ec);
+  std::string targetStr = ec ? targetBase.lexically_normal().generic_string() : targetRel.generic_string();
   std::ostringstream oss;
-  oss << "[memory] imported " << imported << (imported == 1 ? " file" : " files");
-  if(!target.empty()){
-    oss << " into " << target;
-  }
+  oss << "[memory] imported " << imported << (imported == 1 ? " file" : " files") << " into " << targetStr;
   if(personal){
     oss << " (personal)";
   }
@@ -341,11 +396,10 @@ inline ToolExecutionResult MemoryTool::run_note(const ToolExecutionRequest& requ
     g_parse_error_cmd = "memory";
     return tool::detail::text_result("memory note: " + err + "\n", 1);
   }
-  std::vector<std::string> passArgs;
   std::optional<std::string> langOverride;
-  bool hasEditor = false;
-  bool hasText = false;
   bool literal = false;
+  bool useEditor = false;
+  std::vector<std::string> textTokens;
   for(size_t i = 2; i < args.size(); ++i){
     const std::string& tok = args[i];
     if(!literal && tok == "--"){
@@ -361,50 +415,76 @@ inline ToolExecutionResult MemoryTool::run_note(const ToolExecutionRequest& requ
       continue;
     }
     if(tok == "-e" || tok == "--editor"){
-      hasEditor = true;
-    }else if(!tok.empty()){
-      hasText = true;
+      useEditor = true;
+      continue;
     }
-    passArgs.push_back(tok);
+    textTokens.push_back(tok);
   }
-  if(!hasEditor && !hasText){
+  std::string content;
+  if(useEditor){
+    std::string editorError;
+    if(!capture_note_via_editor(request, paths, content, editorError)){
+      g_parse_error_cmd = "memory";
+      return tool::detail::text_result("memory note: " + editorError + "\n", 1);
+    }
+  }else{
+    std::ostringstream oss;
+    for(size_t i = 0; i < textTokens.size(); ++i){
+      if(i) oss << ' ';
+      oss << textTokens[i];
+    }
+    content = trim(oss.str());
+  }
+  if(content.empty()){
     g_parse_error_cmd = "memory";
-    return tool::detail::text_result("usage: memory note <text> | memory note -e\n", 1);
+    return tool::detail::text_result("memory note: content is empty\n", 1);
   }
-  auto reportPath = make_report_path(paths);
-  passArgs.push_back("--report");
-  passArgs.push_back(reportPath.string());
-  auto execResult = run_python_cli(request, paths, "note", passArgs, langOverride);
-  auto report = load_report_json(reportPath);
+  std::filesystem::path notesDir = paths.personal / "notes";
   std::error_code ec;
-  std::filesystem::remove(reportPath, ec);
-  if(execResult.exitCode != 0){
-    std::string message = "memory note failed";
-    if(report && report->isObject()){
-      const auto* status = report->find("status");
-      if(status && status->isString() && status->asString() == "error"){
-        if(const auto* err = report->find("error"); err && err->isString()){
-          message += ": " + err->asString();
-        }
-      }
+  std::filesystem::create_directories(notesDir, ec);
+  if(ec){
+    g_parse_error_cmd = "memory";
+    return tool::detail::text_result("memory note: failed to create notes directory\n", 1);
+  }
+  std::string stamp = current_utc_stamp();
+  int counter = 1;
+  std::filesystem::path notePath;
+  while(true){
+    std::ostringstream name;
+    name << stamp << '-' << std::setw(3) << std::setfill('0') << counter << ".md";
+    auto candidate = notesDir / name.str();
+    if(!std::filesystem::exists(candidate)){
+      notePath = candidate;
+      break;
     }
-    message += "\n";
-    int exitCode = execResult.exitCode == 0 ? 1 : execResult.exitCode;
-    return tool::detail::text_result(message, exitCode);
+    ++counter;
   }
-  std::string notePath;
-  if(report && report->isObject()){
-    const auto* status = report->find("status");
-    if(status && status->isString() && status->asString() == "ok"){
-      if(const auto* pathVal = report->find("path"); pathVal && pathVal->isString()){
-        notePath = pathVal->asString();
-      }
+  {
+    std::ofstream out(notePath);
+    if(!out){
+      g_parse_error_cmd = "memory";
+      return tool::detail::text_result("memory note: failed to write note file\n", 1);
     }
+    out << content;
+    if(content.empty() || content.back() != '\n') out << '\n';
   }
-  if(notePath.empty()){
-    notePath = "personal/notes";
+  auto rel = std::filesystem::relative(notePath, paths.root, ec);
+  std::string relPath = ec ? notePath.lexically_normal().generic_string() : rel.generic_string();
+  OverrideEntry entry{relPath, notePath.generic_string(), "note"};
+  std::filesystem::path overridesPath;
+  std::string overridesError;
+  if(!write_overrides_file(paths, {entry}, overridesPath, overridesError)){
+    g_parse_error_cmd = "memory";
+    return tool::detail::text_result("memory note: " + overridesError + "\n", 1);
   }
-  std::string message = "[memory] created personal note " + notePath + "\n";
+  std::vector<std::string> builderArgs = {"--overrides", overridesPath.string()};
+  auto builderResult = run_index_builder(request, paths, builderArgs, langOverride);
+  std::filesystem::remove(overridesPath, ec);
+  if(builderResult.exitCode != 0){
+    g_parse_error_cmd = "memory";
+    return builderResult;
+  }
+  std::string message = "[memory] created personal note " + relPath + "\n";
   return tool::detail::text_result(message);
 }
 
@@ -856,12 +936,14 @@ inline ToolExecutionResult MemoryTool::run_query(const ToolExecutionRequest& req
 
 inline ToolExecutionResult MemoryTool::run_index_builder(const ToolExecutionRequest& request,
                                                          const Paths& paths,
-                                                         const std::vector<std::string>& extraArgs){
+                                                         const std::vector<std::string>& extraArgs,
+                                                         const std::optional<std::string>& langOverride){
   std::string cmd = "python3 tools/memory_build_index.py";
   cmd += " --root " + shellEscape(paths.root.string());
   cmd += " --index " + shellEscape(paths.index.string());
   cmd += " --personal-subdir " + shellEscape(g_settings.memory.personalSubdir);
-  cmd += " --lang " + shellEscape(memory_summary_language());
+  std::string lang = langOverride.has_value()? *langOverride : memory_summary_language();
+  cmd += " --lang " + shellEscape(lang);
   cmd += " --min-len " + std::to_string(g_settings.memory.summaryMinLen);
   cmd += " --max-len " + std::to_string(g_settings.memory.summaryMaxLen);
   cmd += " --bootstrap-depth " + std::to_string(g_settings.memory.maxBootstrapDepth);
@@ -870,6 +952,177 @@ inline ToolExecutionResult MemoryTool::run_index_builder(const ToolExecutionRequ
     cmd += shellEscape(extra);
   }
   return tool::detail::execute_shell(request, cmd);
+}
+
+inline std::filesystem::path MemoryTool::make_temp_path(const Paths& paths, const std::string& prefix, const std::string& suffix){
+  std::filesystem::path base;
+  try{
+    base = std::filesystem::temp_directory_path();
+  }catch(...){
+    base = paths.root;
+  }
+  auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  for(int i = 0; i < 5; ++i){
+    auto candidate = base / (prefix + std::to_string(stamp + i) + suffix);
+    if(!std::filesystem::exists(candidate)){
+      return candidate;
+    }
+  }
+  return base / (prefix + std::to_string(stamp) + suffix);
+}
+
+inline bool MemoryTool::is_supported_file(const std::filesystem::path& path){
+  std::string ext = path.extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch){ return static_cast<char>(std::tolower(ch)); });
+  return ext == ".md" || ext == ".txt";
+}
+
+inline std::vector<std::filesystem::path> MemoryTool::discover_supported_files(const std::filesystem::path& source){
+  std::vector<std::filesystem::path> files;
+  std::error_code ec;
+  if(std::filesystem::is_regular_file(source, ec)){
+    if(is_supported_file(source)) files.push_back(source);
+    return files;
+  }
+  if(!std::filesystem::is_directory(source, ec)){
+    return files;
+  }
+  std::filesystem::recursive_directory_iterator it(source, ec), end;
+  for(; it != end; ++it){
+    std::error_code statusEc;
+    if(!it->is_regular_file(statusEc)) continue;
+    if(is_supported_file(it->path())) files.push_back(it->path());
+  }
+  return files;
+}
+
+inline bool MemoryTool::apply_copy_mode(const std::filesystem::path& src,
+                                        const std::filesystem::path& dest,
+                                        const std::string& mode,
+                                        std::string& error){
+  std::error_code ec;
+  std::filesystem::create_directories(dest.parent_path(), ec);
+  if(ec){
+    error = "failed to prepare destination directory";
+    return false;
+  }
+  auto copy_file = [&](const std::filesystem::path& from, const std::filesystem::path& to){
+    std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
+    if(ec){
+      error = "failed to copy file";
+      return false;
+    }
+    return true;
+  };
+  if(mode == "copy"){
+    return copy_file(src, dest);
+  }
+  std::filesystem::remove(dest, ec);
+  ec.clear();
+#if defined(_WIN32)
+  std::filesystem::create_hard_link(src, dest, ec);
+  if(!ec) return true;
+  ec.clear();
+#endif
+  std::filesystem::create_symlink(src, dest, ec);
+  if(!ec) return true;
+  ec.clear();
+  return copy_file(src, dest);
+}
+
+inline bool MemoryTool::write_overrides_file(const Paths& paths,
+                                             const std::vector<OverrideEntry>& overrides,
+                                             std::filesystem::path& outPath,
+                                             std::string& error){
+  if(overrides.empty()){
+    error = "no overrides to persist";
+    return false;
+  }
+  auto path = make_temp_path(paths, "memory_overrides_", ".json");
+  std::ofstream out(path);
+  if(!out){
+    error = "failed to open overrides file";
+    return false;
+  }
+  out << "{\n";
+  for(size_t i = 0; i < overrides.size(); ++i){
+    const auto& entry = overrides[i];
+    out << "  \"" << escape_json(entry.relPath) << "\": {\"source\": {\"import_path\": \""
+        << escape_json(entry.sourcePath) << "\", \"import_mode\": \"" << escape_json(entry.importMode) << "\"}}";
+    if(i + 1 < overrides.size()) out << ',';
+    out << "\n";
+  }
+  out << "}\n";
+  if(!out){
+    error = "failed to write overrides file";
+    return false;
+  }
+  outPath = path;
+  return true;
+}
+
+inline std::string MemoryTool::trim(const std::string& value){
+  size_t start = 0;
+  while(start < value.size() && std::isspace(static_cast<unsigned char>(value[start]))) ++start;
+  if(start == value.size()) return std::string();
+  size_t end = value.size();
+  while(end > start && std::isspace(static_cast<unsigned char>(value[end - 1]))) --end;
+  return value.substr(start, end - start);
+}
+
+inline bool MemoryTool::capture_note_via_editor(const ToolExecutionRequest& request,
+                                                const Paths& paths,
+                                                std::string& content,
+                                                std::string& error){
+  auto tmp = make_temp_path(paths, "memory_note_editor_", ".md");
+  {
+    std::ofstream touch(tmp);
+    if(!touch){
+      error = "failed to prepare editor buffer";
+      return false;
+    }
+  }
+  const char* envEditor = std::getenv("EDITOR");
+  std::string editor = envEditor && *envEditor ? envEditor : "vi";
+  std::string command = editor + " " + shellEscape(tmp.string());
+  ToolExecutionRequest editRequest = request;
+  editRequest.silent = false;
+  auto execResult = tool::detail::execute_shell(editRequest, command, false);
+  if(execResult.exitCode != 0){
+    error = "editor exited with code " + std::to_string(execResult.exitCode);
+    std::error_code ec;
+    std::filesystem::remove(tmp, ec);
+    return false;
+  }
+  std::ifstream input(tmp);
+  if(!input){
+    error = "failed to read editor output";
+    std::error_code ec;
+    std::filesystem::remove(tmp, ec);
+    return false;
+  }
+  std::ostringstream oss;
+  oss << input.rdbuf();
+  content = trim(oss.str());
+  std::error_code ec;
+  std::filesystem::remove(tmp, ec);
+  return true;
+}
+
+inline std::string MemoryTool::current_utc_stamp(){
+  auto now = std::chrono::system_clock::now();
+  std::time_t tt = std::chrono::system_clock::to_time_t(now);
+  std::tm tm{};
+#if defined(_WIN32)
+  gmtime_s(&tm, &tt);
+#else
+  gmtime_r(&tt, &tm);
+#endif
+  char buffer[32];
+  if(std::strftime(buffer, sizeof(buffer), "%Y-%m-%d-%H%M%S", &tm) == 0){
+    return "1970-01-01-000000";
+  }
+  return buffer;
 }
 
 inline std::optional<std::string> MemoryTool::normalize_path_arg(const Paths& paths, const std::string& raw){

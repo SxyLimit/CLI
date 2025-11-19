@@ -164,7 +164,7 @@ HOME_PATH=settings
 - `memory note "text"` / `memory note -e [--lang <code>]`：在 `personal/notes/` 下快速记笔记，可直接传入文本或启动 `$EDITOR`，也可按需切换 summary 语言。
 - `memory query "question" [--scope auto|personal|knowledge] [--limit N] [--max-bytes M]`：在 CLI 中以 `[Q]` UI 检索若干文档并调用 `tools/memory_query.py` 生成回答，只基于 Memory 内容作答，可通过 `--limit` 控制上下文数、`--max-bytes` 控制读取片段大小；`auto` 模式会先查 personal，不命中再扩展到全部记忆。
 
-记忆系统相关配置可通过 `memory.*` 键管理，索引构建由 `tools/memory_build_index.py` 完成，导入/记笔记等操作由 `tools/memory_cli.py` 调用索引脚本保持摘要更新。
+记忆系统相关配置可通过 `memory.*` 键管理，索引构建由 `tools/memory_build_index.py` 完成，而导入与记笔记等文件操作在 C++ 内置的 `memory` 命令中直接完成，随后同样调用索引脚本以保持摘要更新。
 
 ## Agent 命令与协作流程
 
