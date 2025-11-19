@@ -32,6 +32,7 @@ HOME_PATH=settings
 - **状态栏扩展**：可通过 `StatusProvider` 注册自定义状态（示例中显示当前工作目录）。
 - **外部工具配置**：支持在配置目录（默认 `./settings/`）下的 `mycli_tools.conf` 中用 INI 语法新增命令及子命令，含互斥选项、动态执行等；所有配置驱动的命令在执行前也会自动恢复终端状态，再在收尾阶段切回 REPL。
 - **消息提醒**：可监听指定目录（默认当前目录下的 `message/`）中的 `.md` 文件，新建或修改后提示符前会显示红色 `[M]`，通过 `message list/last/detail` 查看。
+- **记忆系统**：提供 `memory` 命令管理个人记忆与知识库，支持初始化、导入 Markdown/文本、浏览摘要、搜索、快速记笔记与基于记忆的 `memory query` 问答，同时 Python Agent 也能通过 `memory.*` 工具按目录浏览、搜索并读取记忆文件。
 - **可定制提示符**：通过设置 `prompt.name` 与 `prompt.theme` 自定义提示符名称及颜色。提供纯蓝、蓝紫、红黄渐变与紫橙渐变四种主题，并可为任意主题配置结构化图片（`prompt.theme_art_path.<theme>`）以在 `show MyCLI` 中输出彩色图案。
 - **LLM 接口**：提供 `llm` 命令，调用 `tools/llm.py` 通过 Moonshot(Kimi) 接口（或本地回显模式）完成调用与历史查看。
 
@@ -95,6 +96,14 @@ HOME_PATH=settings
 | `prompt.input_ellipsis.right_width` | 非负整数 | `50` | 整体视窗的最大宽度，仅在启用省略号时生效。 |
 | `history.recent_limit` | 非负整数 | `10` | 历史记录最多保留的条目数。 |
 | `agent.fs_tools.expose` | `true` / `false` | `false` | 是否在 CLI 中暴露 `fs.read` / `fs.write` / `fs.create` / `fs.tree` 命令及其补全。 |
+| `memory.enabled` | `true` / `false` | `true` | 是否启用 Memory 系统。设为 `false` 时不会扫描索引。 |
+| `memory.root` | 目录路径 | `${home.path}/memory` | Memory 根目录（含索引与 personal/knowledge 等子目录）。 |
+| `memory.index_file` | 文件路径 | `${memory.root}/memory_index.jsonl` | 索引文件路径。 |
+| `memory.personal_subdir` | 字符串 | `personal` | 个人记忆目录名称，可改为自定义名字。 |
+| `memory.summary.lang` | 语言代码 | 同 `language` | summary 默认语言。 |
+| `memory.summary.min_len` | 整数 | `50` | summary 最小长度。 |
+| `memory.summary.max_len` | 整数 | `100` | summary 最大长度。 |
+| `memory.max_bootstrap_depth` | 整数 | `1` | Agent 启动时默认曝光的最大层级。 |
 
 当设置值来自文件路径时，CLI 会根据键定义的路径类型（文件或目录）与允许后缀自动筛选候选项，避免误选不受支持的文件。
 
@@ -112,6 +121,7 @@ HOME_PATH=settings
 - `setting set prompt.theme <blue|blue-purple|red-yellow|purple-orange>`：在纯蓝与多种渐变主题之间切换。
 - `setting set prompt.input_ellipsis.enabled <true|false>`：开启后，当输入或自动补全内容超过指定长度时，会围绕光标保留左右两侧的可视窗口，并用 `.` 填充被截断的区域，避免光标被推到屏幕之外。
 - `setting set prompt.input_ellipsis.left_width <列宽>` / `setting set prompt.input_ellipsis.right_width <列宽>`：分别配置光标左侧可保留的最大宽度与整体可视窗口的最大显示宽度（单位为等宽字符数），默认值分别为 `30` 与 `50`，必须为非负整数。
+  - 当下方没有自动补全候选时，输入行会按照 `prompt.input_ellipsis.right_width` 的列宽自动换行，确保整条命令可见；若存在候选列表，则仍采用右侧省略的形式以避免遮挡提示区域。换行与省略都会在 UTF-8 字符边界处截断，避免出现半个字符的乱码。
 - `setting set history.recent_limit <数量>`：调整历史指令最多保留的条目数（默认 10，设为 0 可禁用历史记录）。
 - `setting set agent.fs_tools.expose <true|false>`：是否在 CLI 中暴露 `fs.read` / `fs.write` / `fs.create` / `fs.tree` 命令。默认 `false`（仅 Agent 调用），设为 `true` 后可手动运行并恢复补全/帮助。
 - `setting set prompt.theme_art_path.<theme> <path>`：为指定主题配置图片结构化文本路径（例如 `prompt.theme_art_path.red-yellow`），仅接受 `.climg` 文件并在补全时只展示目录与 `.climg` 文件；搭配 `tools/image_to_art.py` 生成即可在 `show MyCLI` 中显示彩色图片（旧版本的 `prompt.theme_art_path` 仍作为 `prompt.theme_art_path.blue-purple` 的别名保留）。
@@ -142,6 +152,21 @@ HOME_PATH=settings
 
 当检测到新的历史记录时，提示符前会出现红色 `[L]` 提醒，可通过执行 `llm recall` 清除。
 
+## Memory 命令
+
+`memory` 命令围绕 `settings/memory/` 目录构建树形记忆结构，`memory init` 会创建索引文件 `memory_index.jsonl` 并生成顶层 summary。常用子命令：
+
+- `memory init`：初始化根目录、`personal/` 与默认 `knowledge/` 树，同时运行索引脚本生成 summary。
+- `memory import <src> [--personal] [--category <name>] [--mode copy|link|mirror] [--lang <code>] [--force]`：导入单个文件或整棵目录，仅接受 `.md/.txt`。支持复制/符号链接/mirror（mirror 会记录来源并在索引中标记），并可通过 `--lang` 临时覆盖摘要语言，`--force` 则强制重算 summary。
+- `memory list [path] [-d depth] [--personal-only|--knowledge-only]`：按目录树列出 summary。默认展示 Memory 根摘要、根下顶层目录与其直接文件，保持“顶层摘要+按需下钻”的体验；使用 `-d` 控制展开层级，或通过 bucket 过滤专注 personal/knowledge。
+- `memory show <path> [--content] [--max-bytes N]`：查看任意节点的 summary 与元数据（bucket、tags、来源、updated_at 等），带 `--content` 时可读取文件片段（最多 `--max-bytes` 字节，目录则提示不支持）。
+- `memory search <keywords...> [--scope all|personal|knowledge] [--limit N] [--in summary|content|both]`：基于 title/summary（以及可选正文）检索节点并显示得分。
+- `memory stats`：输出节点总数、bucket 分布、深度统计与 token 估算。
+- `memory note "text"` / `memory note -e [--lang <code>]`：在 `personal/notes/` 下快速记笔记，可直接传入文本或启动 `$EDITOR`，也可按需切换 summary 语言。
+- `memory query "question" [--scope auto|personal|knowledge] [--limit N] [--max-bytes M]`：在 CLI 中以 `[Q]` UI 检索若干文档并调用 `tools/memory_query.py` 生成回答，只基于 Memory 内容作答，可通过 `--limit` 控制上下文数、`--max-bytes` 控制读取片段大小；`auto` 模式会先查 personal，不命中再扩展到全部记忆。
+
+记忆系统相关配置可通过 `memory.*` 键管理，索引构建由 `tools/memory_build_index.py` 完成，而导入与记笔记等文件操作在 C++ 内置的 `memory` 命令中直接完成，随后同样调用索引脚本以保持摘要更新。
+
 ## Agent 命令与协作流程
 
 ### Agent 命令速查
@@ -154,6 +179,8 @@ HOME_PATH=settings
 | `agent tools` | `agent tools --json` | 导出沙盒工具的 JSON Schema，便于外部 Agent 校验契约。 |
 
 `agent run` 会调用 `tools/agent/agent.py`（默认通过 `python3`），采用行分隔 JSON 协议创建会话：CLI 先发送 `hello`（工具目录、配额与沙盒策略）和 `start`（目标描述与工作目录），Python Agent 可多次请求工具调用，返回 `final` 后 CLI 完成收尾。所有消息和工具调用会写入 `./artifacts/<session_id>/transcript.jsonl` 与 `summary.txt`，并在 `final` 携带 `artifacts[]` 时同步落盘。
+
+为了让 Agent 能够读取记忆系统，在 `hello` 消息中会附带 `memory.bootstrap`（只包含 `eager_expose=true` 的目录与文件摘要），并额外提供 `memory.list` / `memory.search` / `memory.read` 三个仅 Agent 可用的工具，便于在自动化流程中浏览 personal/knowledge 记忆并读取文件内容。
 
 `agent saferun` 复用了同一协作协议，但会在触发关键操作时暂停等待人工确认：默认情况下所有非 `fs.*` 工具以及 `fs.exec.shell` 都会先进入人工审核；添加 `-a` 后则进一步要求每一次工具调用都需被审核通过才会执行。审核过程会在 `agent monitor` 中展示并支持 `y/n` 快速批准或拒绝。
 

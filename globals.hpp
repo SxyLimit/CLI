@@ -252,6 +252,17 @@ enum class SubsequenceStrategy {
   Greedy,
 };
 
+struct MemorySettings {
+  bool enabled = true;
+  std::string root;
+  std::string indexFile;
+  std::string personalSubdir = "personal";
+  std::string summaryLanguage;
+  int summaryMinLen = 50;
+  int summaryMaxLen = 100;
+  int maxBootstrapDepth = 1;
+};
+
 struct AppSettings {
   CwdMode cwdMode = CwdMode::Full;
   bool completionIgnoreCase = false;
@@ -269,6 +280,7 @@ struct AppSettings {
   int  historyRecentLimit = 10;
   std::string configHome;
   bool agentExposeFsTools = false;
+  MemorySettings memory;
 };
 
 extern AppSettings g_settings;
@@ -293,6 +305,12 @@ void apply_settings_to_runtime();
 bool settings_get_value(const std::string& key, std::string& value);
 bool settings_set_value(const std::string& key, const std::string& value, std::string& error);
 std::vector<std::string> settings_list_keys();
+
+bool memory_system_enabled();
+std::filesystem::path memory_root_path();
+std::filesystem::path memory_index_path();
+std::filesystem::path memory_personal_path();
+std::string memory_summary_language();
 
 // ===== Localization =====
 std::string tr(const std::string& key);
