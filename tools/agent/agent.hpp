@@ -872,10 +872,31 @@ inline std::optional<std::pair<std::string, std::filesystem::path>> load_latest_
   return std::make_pair(sessionId, transcriptPath.lexically_normal());
 }
 
+inline size_t agent_utf8_char_length(unsigned char lead){
+  if((lead & 0x80) == 0) return 1;
+  if((lead & 0xE0) == 0xC0) return 2;
+  if((lead & 0xF0) == 0xE0) return 3;
+  if((lead & 0xF8) == 0xF0) return 4;
+  return 1;
+}
+
+inline std::string agent_utf8_prefix(const std::string& text, size_t maxBytes){
+  if(text.size() <= maxBytes) return text;
+  size_t i = 0;
+  while(i < text.size()){
+    size_t len = agent_utf8_char_length(static_cast<unsigned char>(text[i]));
+    if(i + len > maxBytes) break;
+    i += len;
+  }
+  return text.substr(0, i);
+}
+
 inline std::string truncate_summary(const std::string& text, size_t limit){
   if(text.size() <= limit) return text;
-  if(limit <= 3) return text.substr(0, limit);
-  return text.substr(0, limit - 3) + "...";
+  if(limit == 0) return std::string();
+  if(limit <= 3) return agent_utf8_prefix(text, limit);
+  std::string head = agent_utf8_prefix(text, limit - 3);
+  return head + "...";
 }
 
 struct AgentSessionCompletionEntry {
