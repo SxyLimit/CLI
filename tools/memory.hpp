@@ -65,48 +65,141 @@ inline bool is_supported_memory_file(const std::filesystem::path& p){
   return ext == ".md" || ext == ".txt";
 }
 
-inline size_t copy_memory_file(const std::filesystem::path& src,
-                              const std::filesystem::path& dst,
-                              const std::string& mode){
+struct MemoryImportOutcome {
+  size_t filesWritten = 0;
+  size_t sanitizedComponents = 0;
+  size_t splitOutputs = 0;
+};
+
+inline std::vector<std::string> chunk_memory_content(const std::string& content, size_t softLimit){
+  std::vector<std::string> segments;
+  std::stringstream ss(content);
+  std::string line;
+  std::string current;
+  auto flush_current = [&](){
+    if(current.empty()) return;
+    segments.push_back(current);
+    current.clear();
+  };
+  while(std::getline(ss, line)){
+    if(line.size() >= 1 && line[0] == '#'){
+      flush_current();
+    }
+    current += line;
+    current.push_back('\n');
+  }
+  flush_current();
+  if(segments.empty()) segments.push_back(content);
+
+  std::vector<std::string> chunks;
+  for(const auto& seg : segments){
+    if(seg.size() <= softLimit){
+      chunks.push_back(seg);
+      continue;
+    }
+    std::stringstream ps(seg);
+    std::string para;
+    std::string builder;
+    auto flush_builder = [&](){
+      if(builder.empty()) return;
+      chunks.push_back(builder);
+      builder.clear();
+    };
+    while(std::getline(ps, para, '\n')){
+      if(builder.size() + para.size() + 1 > softLimit && !builder.empty()){
+        flush_builder();
+      }
+      builder += para;
+      builder.push_back('\n');
+    }
+    flush_builder();
+  }
+  return chunks;
+}
+
+inline size_t write_memory_chunk(const std::filesystem::path& src,
+                                 const std::filesystem::path& dst,
+                                 const std::string& mode,
+                                 const std::string& content,
+                                 bool allowLink){
   std::error_code ec;
   std::filesystem::create_directories(dst.parent_path(), ec);
-  if(mode == "link"){
+  if(mode == "link" && allowLink){
     std::filesystem::remove(dst, ec);
     std::filesystem::create_symlink(src, dst, ec);
-  }else{
-    std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec);
+    return 1;
   }
+  std::ofstream out(dst, std::ios::binary);
+  out << content;
+  out.close();
   return 1;
 }
 
-inline size_t import_from_source(const std::filesystem::path& src,
-                                 const std::filesystem::path& destRoot,
+inline size_t import_single_file(const std::filesystem::path& src,
+                                 const std::filesystem::path& dst,
                                  const std::string& mode,
-                                 size_t& sanitizedCount){
-  size_t count = 0;
+                                 MemoryImportOutcome& outcome){
+  std::error_code ec;
+  std::string raw;
+  try{
+    std::ifstream in(src, std::ios::binary);
+    raw.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  }catch(const std::exception&){
+    return 0;
+  }
+  auto chunks = chunk_memory_content(raw, 2000);
+  bool singleChunk = chunks.size() == 1;
+  std::filesystem::path base = dst;
+  std::string ext = base.extension().string();
+  std::string stem = base.stem().string();
+  size_t index = 1;
+  size_t chunkCount = chunks.size();
+  for(const auto& c : chunks){
+    std::filesystem::path finalDst;
+    if(singleChunk){
+      finalDst = base;
+    }else{
+      std::ostringstream name;
+      name << stem << "-p" << index << ext;
+      finalDst = base.parent_path() / name.str();
+    }
+    write_memory_chunk(src, finalDst, singleChunk ? mode : "copy", c, singleChunk && mode == "link");
+    ++outcome.filesWritten;
+    ++index;
+  }
+  if(!singleChunk && chunkCount > 1){
+    outcome.splitOutputs += (chunkCount - 1);
+  }
+  return chunks.size();
+}
+
+inline MemoryImportOutcome import_from_source(const std::filesystem::path& src,
+                                              const std::filesystem::path& destRoot,
+                                              const std::string& mode){
+  MemoryImportOutcome outcome;
   if(std::filesystem::is_regular_file(src)){
-    if(!is_supported_memory_file(src)) return 0;
+    if(!is_supported_memory_file(src)) return outcome;
     std::string sanitizedName = sanitize_memory_filename(src.filename().string());
-    if(sanitizedName != src.filename().string()) ++sanitizedCount;
-    count += copy_memory_file(src, destRoot / sanitizedName, mode);
-    return count;
+    if(sanitizedName != src.filename().string()) ++outcome.sanitizedComponents;
+    import_single_file(src, destRoot / sanitizedName, mode, outcome);
+    return outcome;
   }
   if(std::filesystem::is_directory(src)){
     auto base = sanitize_memory_component(src.filename().string());
-    if(base != src.filename().string()) ++sanitizedCount;
+    if(base != src.filename().string()) ++outcome.sanitizedComponents;
     std::filesystem::path prefix = destRoot;
     if(destRoot.filename() != base) prefix /= base;
     for(auto& entry : std::filesystem::recursive_directory_iterator(src)){
       if(entry.is_regular_file() && is_supported_memory_file(entry.path())){
         auto rel = std::filesystem::relative(entry.path(), src);
         auto sanitizedRel = sanitize_memory_relative(rel);
-        if(sanitizedRel != rel) ++sanitizedCount;
+        if(sanitizedRel != rel) ++outcome.sanitizedComponents;
         std::filesystem::path dst = prefix / sanitizedRel;
-        count += copy_memory_file(entry.path(), dst, mode);
+        import_single_file(entry.path(), dst, mode, outcome);
       }
     }
   }
-  return count;
+  return outcome;
 }
 
 inline std::string default_category_for(const std::filesystem::path& src){
@@ -166,16 +259,18 @@ inline ToolExecutionResult handle_memory_import(const std::vector<std::string>& 
     std::ostringstream startDetail;
     startDetail << "import start: " << src << " -> " << destRoot;
     memory_append_event(effective, "import_start", startDetail.str());
-    size_t sanitizedCount = 0;
-    size_t count = import_from_source(src, destRoot, mode, sanitizedCount);
+    MemoryImportOutcome outcome = import_from_source(src, destRoot, mode);
     auto res = rebuild_memory_index(effective, effective.summaryLang, /*silent=*/true);
     std::ostringstream finishDetail;
-    finishDetail << "import complete: " << src << " -> " << destRoot << " files=" << count << " sanitized=" << sanitizedCount << " exit=" << res.exitCode;
+    finishDetail << "import complete: " << src << " -> " << destRoot << " files=" << outcome.filesWritten << " sanitized=" << outcome.sanitizedComponents << " split=" << outcome.splitOutputs << " exit=" << res.exitCode;
     memory_append_event(effective, "import_complete", finishDetail.str());
     std::ostringstream oss;
-    oss << ansi::YELLOW << "[I]" << ansi::RESET << " imported " << count << " files into " << destRoot << "\n";
-    if(sanitizedCount > 0){
-      oss << "Sanitized " << sanitizedCount << " path component(s) to ASCII-safe names.\n";
+    oss << ansi::YELLOW << "[I]" << ansi::RESET << " imported " << outcome.filesWritten << " file chunk(s) into " << destRoot << "\n";
+    if(outcome.sanitizedComponents > 0){
+      oss << "Sanitized " << outcome.sanitizedComponents << " path component(s) to ASCII-safe names.\n";
+    }
+    if(outcome.splitOutputs > 0){
+      oss << "Split source files into " << outcome.filesWritten << " chunks (" << outcome.splitOutputs << " extra pieces) to keep consistent granularity.\n";
     }
     oss << res.output;
     oss << ansi::RED << "[I]" << ansi::RESET << " import finished.\n";
