@@ -3155,41 +3155,50 @@ int main(){
     };
 
     int cursorCol = baseIndent + 1;
-    int printedLeftDots = 0;
-    int printedRightDots = 0;
-    int widthBeforeAnchor = 0;
+    int printedLeftDots = view.leftApplied ? view.leftDotWidth : 0;
+    int printedRightDots = view.rightApplied ? view.rightDotWidth : 0;
+    int widthBeforeAnchor = printedLeftDots;
 
-    if(!haveCand && wrapLimit > 0){
+    for(size_t i = 0; i < segments.size(); ++i){
+      if(i >= anchorSegmentIndex) break;
+      const std::string& trimmed = view.trimmedTexts[i];
+      if(trimmed.empty()) continue;
+      widthBeforeAnchor += displayWidth(trimmed);
+    }
+
+    int renderedWidth = printedLeftDots + printedRightDots;
+    for(const auto& trimmed : view.trimmedTexts){
+      renderedWidth += displayWidth(trimmed);
+    }
+
+    bool wrappedWithSuggestions = false;
+    int rowsBelowCursor = 0;
+
+    if(wrapLimit > 0 && (!haveCand || renderedWidth > wrapLimit)){
       auto wrapResult = printWrappedSegments(wrapLimit);
       lastWrappedLines = wrapResult.linesUsed;
       cursorCol = wrapResult.caretCol;
-
-      int rowsBelowCursor = wrapResult.linesUsed - wrapResult.caretRow;
-      if(rowsBelowCursor > 0){
+      rowsBelowCursor = wrapResult.linesUsed - wrapResult.caretRow;
+      if(!haveCand && rowsBelowCursor > 0){
         std::cout << ansi::CUU << rowsBelowCursor << "A";
       }
 
-      if(lastShown > 0){
+      if(lastShown > 0 && !haveCand){
         std::cout << ansi::CHA << 1 << "G";
         for(int i = 0; i < lastShown; ++i){ std::cout << "\n" << ansi::CLR; }
         std::cout << ansi::CUU << lastShown << "A";
         lastShown = 0;
       }
 
-      std::cout << ansi::CHA << cursorCol << "G" << std::flush;
+      if(!haveCand){
+        std::cout << ansi::CHA << cursorCol << "G" << std::flush;
+      }else{
+        wrappedWithSuggestions = true;
+      }
     }else{
       lastWrappedLines = 0;
       if(view.leftApplied && view.leftDotWidth > 0){
-        printedLeftDots = view.leftDotWidth;
         std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
-      }
-
-      widthBeforeAnchor = printedLeftDots;
-      for(size_t i = 0; i < segments.size(); ++i){
-        if(i >= anchorSegmentIndex) break;
-        const std::string& trimmed = view.trimmedTexts[i];
-        if(trimmed.empty()) continue;
-        widthBeforeAnchor += displayWidth(trimmed);
       }
 
       for(size_t i = 0; i < segments.size(); ++i){
@@ -3219,7 +3228,6 @@ int main(){
       }
 
       if(view.rightApplied && view.rightDotWidth > 0){
-        printedRightDots = view.rightDotWidth;
         std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
       }
 
@@ -3235,7 +3243,14 @@ int main(){
     int tailLimit = rightLimit;
 
     if(haveCand){
+      if(wrappedWithSuggestions && rowsBelowCursor > 0){
+        std::cout << "\x1b[" << rowsBelowCursor << "B" << ansi::CHA << 1 << "G";
+      }
       renderBelowThree(status, status_len, cursorCol, suggestionIndent, cand, sel, lastShown, tailLimit);
+      if(wrappedWithSuggestions && rowsBelowCursor > 0){
+        std::cout << ansi::CUU << rowsBelowCursor << "A";
+      }
+      std::cout << ansi::CHA << cursorCol << "G" << std::flush;
     }else{
       for(int i=0;i<lastShown;i++){ std::cout<<"\n"<<"\x1b[2K"; }
       if(lastShown>0){ std::cout<<ansi::CUU<<lastShown<<"A"<<ansi::CHA<<1<<"G"; }
