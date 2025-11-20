@@ -9,6 +9,7 @@
 #include "fs_exec.hpp"
 #include "../../utils/agent_state.hpp"
 #include "../../utils/json.hpp"
+#include "../../utils/utf8.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -827,9 +828,26 @@ inline std::optional<std::pair<std::string, std::filesystem::path>> load_latest_
 }
 
 inline std::string truncate_summary(const std::string& text, size_t limit){
-  if(text.size() <= limit) return text;
-  if(limit <= 3) return text.substr(0, limit);
-  return text.substr(0, limit - 3) + "...";
+  auto glyphs = utf8Glyphs(text);
+  if(limit <= 3){
+    std::string out;
+    size_t collected = 0;
+    for(const auto& g : glyphs){
+      if(collected + 1 > limit) break;
+      out += g.bytes;
+      collected += 1;
+    }
+    return out;
+  }
+  size_t glyphLimit = limit;
+  if(glyphs.size() <= glyphLimit) return text;
+  if(glyphLimit <= 3) glyphLimit = 3;
+  std::string out;
+  for(size_t i = 0; i + 3 < glyphLimit && i < glyphs.size(); ++i){
+    out += glyphs[i].bytes;
+  }
+  out += "...";
+  return out;
 }
 
 struct AgentSessionCompletionEntry {
