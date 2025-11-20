@@ -23,7 +23,7 @@ inline std::string scope_from_flag(bool personalOnly, bool knowledgeOnly){
   return "all";
 }
 
-inline ToolExecutionResult rebuild_memory_index(const MemoryConfig& cfg, const std::string& langOverride){
+inline ToolExecutionResult rebuild_memory_index(const MemoryConfig& cfg, const std::string& langOverride, bool silent = false){
   std::ostringstream cmd;
   cmd << "python3 tools/memory_build_index.py"
       << " --root " << shellEscape(cfg.root)
@@ -34,7 +34,9 @@ inline ToolExecutionResult rebuild_memory_index(const MemoryConfig& cfg, const s
   if(!langOverride.empty()){
     cmd << " --lang " << shellEscape(langOverride);
   }
-  return detail::execute_shell(ToolExecutionRequest{}, cmd.str());
+  ToolExecutionRequest req{};
+  req.silent = silent;
+  return detail::execute_shell(req, cmd.str());
 }
 
 inline bool ensure_memory_paths(const MemoryConfig& cfg, std::string& message){
@@ -166,7 +168,7 @@ inline ToolExecutionResult handle_memory_import(const std::vector<std::string>& 
     memory_append_event(effective, "import_start", startDetail.str());
     size_t sanitizedCount = 0;
     size_t count = import_from_source(src, destRoot, mode, sanitizedCount);
-    auto res = rebuild_memory_index(effective, effective.summaryLang);
+    auto res = rebuild_memory_index(effective, effective.summaryLang, /*silent=*/true);
     std::ostringstream finishDetail;
     finishDetail << "import complete: " << src << " -> " << destRoot << " files=" << count << " sanitized=" << sanitizedCount << " exit=" << res.exitCode;
     memory_append_event(effective, "import_complete", finishDetail.str());
