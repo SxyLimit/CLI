@@ -1897,23 +1897,28 @@ static EllipsisComputationResult applyTailEllipsis(const std::vector<EllipsisSeg
   if(glyphs.empty()) return result;
 
   result.applied = true;
+  int dotWidth = std::min(1, maxWidth);
+  int remainingWidth = maxWidth - dotWidth;
+  if(remainingWidth < 0) remainingWidth = 0;
+
   std::vector<int> keptIndices;
   keptIndices.reserve(glyphs.size());
   int keptWidth = 0;
-  for(int idx = static_cast<int>(glyphs.size()) - 1; idx >= 0; --idx){
-    keptIndices.push_back(idx);
-    keptWidth += glyphs[static_cast<size_t>(idx)].glyph.width;
-    if(keptWidth >= maxWidth) break;
+  for(size_t idx = 0; idx < glyphs.size(); ++idx){
+    int w = glyphs[idx].glyph.width;
+    if(w <= 0) w = 1;
+    if(keptWidth + w <= remainingWidth){
+      keptIndices.push_back(static_cast<int>(idx));
+      keptWidth += w;
+    }else{
+      break;
+    }
   }
-  std::reverse(keptIndices.begin(), keptIndices.end());
-  while(keptWidth > maxWidth && !keptIndices.empty()){
-    int frontIdx = keptIndices.front();
-    keptWidth -= glyphs[static_cast<size_t>(frontIdx)].glyph.width;
-    keptIndices.erase(keptIndices.begin());
-  }
-  if(keptIndices.empty()){
-    keptIndices.push_back(static_cast<int>(glyphs.size()) - 1);
-    keptWidth = glyphs.back().glyph.width;
+
+  if(keptIndices.empty() && !glyphs.empty()){
+    keptIndices.push_back(0);
+    keptWidth = glyphs[0].glyph.width;
+    dotWidth = std::max(0, maxWidth - keptWidth);
   }
 
   for(int idx : keptIndices){
@@ -1926,8 +1931,7 @@ static EllipsisComputationResult applyTailEllipsis(const std::vector<EllipsisSeg
   }
 
   result.keptWidth = keptWidth;
-  result.dotWidth = maxWidth - keptWidth;
-  if(result.dotWidth < 0) result.dotWidth = 0;
+  result.dotWidth = dotWidth;
   return result;
 }
 
@@ -2128,6 +2132,107 @@ static WindowEllipsisResult applyWindowEllipsis(const std::vector<EllipsisSegmen
     result.trimmedGlyphCounts[ref.segment] += 1;
   }
 
+  return result;
+}
+
+struct WrappedRenderResult {
+  int totalLines = 1;
+  int cursorLine = 0;
+  int cursorColumn = 1;
+};
+
+static WrappedRenderResult renderSegmentsWithWrapping(const std::vector<EllipsisSegment>& segments,
+                                                      size_t cursorSegmentIndex,
+                                                      size_t cursorGlyphIndex,
+                                                      size_t pathErrorSegmentIndex,
+                                                      int baseIndent,
+                                                      int wrapWidth){
+  WrappedRenderResult result;
+  if(segments.empty()) return result;
+
+  int limit = std::max(1, wrapWidth);
+
+  std::vector<std::vector<Utf8Glyph>> glyphsBySegment(segments.size());
+  for(size_t i = 0; i < segments.size(); ++i){
+    glyphsBySegment[i] = utf8Glyphs(segments[i].text);
+  }
+
+  auto colorForSegment = [&](size_t idx)->const char*{
+    const auto& seg = segments[idx];
+    switch(seg.role){
+      case EllipsisSegmentRole::Buffer:
+        return (idx == pathErrorSegmentIndex) ? ansi::RED : ansi::WHITE;
+      case EllipsisSegmentRole::InlineSuggestion:
+        return ansi::WHITE;
+      case EllipsisSegmentRole::Annotation:
+        return ansi::GREEN;
+      case EllipsisSegmentRole::PathErrorDetail:
+        return ansi::YELLOW;
+      case EllipsisSegmentRole::Ghost:
+        return ansi::GRAY;
+    }
+    return ansi::WHITE;
+  };
+
+  int currentWidth = 0;
+  int currentLine = 0;
+  int cursorLine = 0;
+  int cursorCol = baseIndent + 1;
+  bool cursorPlaced = false;
+  const char* activeColor = nullptr;
+
+  auto placeCursor = [&](int line, int col){
+    if(cursorPlaced) return;
+    cursorLine = line;
+    cursorCol = col;
+    cursorPlaced = true;
+  };
+  auto maybePlaceCursorAt = [&](size_t segIdx, size_t glyphIdx){
+    if(cursorPlaced) return;
+    if(segIdx == cursorSegmentIndex && glyphIdx == cursorGlyphIndex){
+      placeCursor(currentLine, baseIndent + currentWidth + 1);
+    }
+  };
+  auto flushColor = [&](const char* next){
+    if(activeColor == next) return;
+    if(activeColor) std::cout << ansi::RESET;
+    if(next) std::cout << next;
+    activeColor = next;
+  };
+  auto newLine = [&](){
+    flushColor(nullptr);
+    std::cout << "\n" << "\x1b[2K";
+    for(int i = 0; i < baseIndent; ++i) std::cout << ' ';
+    currentLine += 1;
+    currentWidth = 0;
+  };
+
+  for(size_t segIdx = 0; segIdx < segments.size(); ++segIdx){
+    const auto& glyphs = glyphsBySegment[segIdx];
+    if(glyphs.empty()) continue;
+    const char* segColor = colorForSegment(segIdx);
+    for(size_t gi = 0; gi < glyphs.size(); ++gi){
+      const auto& g = glyphs[gi];
+      int w = std::max(1, g.width);
+      if(currentWidth + w > limit){
+        newLine();
+      }
+      maybePlaceCursorAt(segIdx, gi);
+      flushColor(segColor);
+      std::cout << g.bytes;
+      currentWidth += w;
+    }
+    maybePlaceCursorAt(segIdx, glyphs.size());
+  }
+  flushColor(nullptr);
+
+  if(!cursorPlaced){
+    placeCursor(currentLine, baseIndent + currentWidth + 1);
+  }
+
+  result.totalLines = currentLine + 1;
+  result.cursorLine = cursorLine;
+  result.cursorColumn = cursorCol;
   return result;
 }
 
@@ -2826,44 +2931,78 @@ static void renderInputWithGhost(const std::string& status, int status_len,
 
 static std::string renderHighlightedLabelWithTailEllipsis(const std::string& label,
                                                           const std::vector<int>& matches,
-                                                          int maxWidth){
-  if(maxWidth <= 0) return renderHighlightedLabel(label, matches);
+                                                          int maxWidth,
+                                                          const std::string& annotation){
+  if(maxWidth <= 0){
+    std::string line = renderHighlightedLabel(label, matches);
+    if(!annotation.empty()){
+      line += " ";
+      line += ansi::GREEN;
+      line += annotation;
+      line += ansi::RESET;
+    }
+    return line;
+  }
+
   std::vector<EllipsisSegment> segments;
   segments.push_back(EllipsisSegment{EllipsisSegmentRole::InlineSuggestion, label, matches});
+  if(!annotation.empty()){
+    segments.push_back(EllipsisSegment{EllipsisSegmentRole::Annotation, " " + annotation, {}});
+  }
+
   auto result = applyTailEllipsis(segments, maxWidth);
   if(!result.applied){
-    return renderHighlightedLabel(label, matches);
+    std::string line = renderHighlightedLabel(label, matches);
+    if(!annotation.empty()){
+      line += " ";
+      line += ansi::GREEN;
+      line += annotation;
+      line += ansi::RESET;
+    }
+    return line;
   }
-  auto glyphs = utf8Glyphs(label);
-  size_t first = (segments.size() > 0) ? result.firstGlyphIndex[0] : std::numeric_limits<size_t>::max();
-  int count = (segments.size() > 0) ? result.trimmedGlyphCounts[0] : 0;
-  if(first == std::numeric_limits<size_t>::max() || count <= 0){
-    std::string dots = std::string(static_cast<size_t>(std::max(0, result.dotWidth)), '.');
-    if(dots.empty()) return std::string();
-    return ansi::GRAY + dots + ansi::RESET;
-  }
-  auto matched = glyphMatchesFor(glyphs, matches);
+
   std::string out;
+
+  if(!segments.empty()){
+    size_t first = result.firstGlyphIndex[0];
+    int count = result.trimmedGlyphCounts[0];
+    auto glyphs = utf8Glyphs(label);
+    if(first != std::numeric_limits<size_t>::max() && count > 0){
+      auto matched = glyphMatchesFor(glyphs, matches);
+      int state = 0;
+      auto flush = [&](int next){
+        if(state == next) return;
+        if(state != 0) out += ansi::RESET;
+        if(next == 1) out += ansi::WHITE;
+        else if(next == 2) out += ansi::GRAY;
+        state = next;
+      };
+      for(int j = 0; j < count && first + static_cast<size_t>(j) < glyphs.size(); ++j){
+        size_t gi = first + static_cast<size_t>(j);
+        bool isMatch = (gi < matched.size() && matched[gi]);
+        flush(isMatch ? 1 : 2);
+        out += glyphs[gi].bytes;
+      }
+      flush(0);
+    }
+  }
+
+  if(segments.size() > 1){
+    const std::string& trimmed = result.trimmedTexts[1];
+    if(!trimmed.empty()){
+      out += ansi::GREEN;
+      out += trimmed;
+      out += ansi::RESET;
+    }
+  }
+
   if(result.dotWidth > 0){
     out += ansi::GRAY;
     out += std::string(static_cast<size_t>(result.dotWidth), '.');
     out += ansi::RESET;
   }
-  int state = 0;
-  auto flush = [&](int next){
-    if(state == next) return;
-    if(state != 0) out += ansi::RESET;
-    if(next == 1) out += ansi::WHITE;
-    else if(next == 2) out += ansi::GRAY;
-    state = next;
-  };
-  for(int j = 0; j < count && first + static_cast<size_t>(j) < glyphs.size(); ++j){
-    size_t gi = first + static_cast<size_t>(j);
-    bool isMatch = (gi < matched.size() && matched[gi]);
-    flush(isMatch ? 1 : 2);
-    out += glyphs[gi].bytes;
-  }
-  flush(0);
+
   return out;
 }
 
@@ -2907,14 +3046,8 @@ static void renderBelowThree(const std::string& status, int status_len,
     size_t idx = static_cast<size_t>((sel + i) % total);
     const std::string& label = cand.labels[idx];
     const std::vector<int>& matches = cand.matchPositions[idx];
-    std::string line = renderHighlightedLabelWithTailEllipsis(label, matches, tailLimit);
     std::string annotation = (idx < cand.annotations.size()) ? cand.annotations[idx] : "";
-    if(!annotation.empty()){
-      line += " ";
-      line += ansi::GREEN;
-      line += annotation;
-      line += ansi::RESET;
-    }
+    std::string line = renderHighlightedLabelWithTailEllipsis(label, matches, tailLimit, annotation);
     std::cout << "\n" << "\x1b[2K";
     for(int s = 0; s < indent; ++s) std::cout << ' ';
     std::cout << line;
@@ -3091,6 +3224,7 @@ int main(){
   size_t cursorByte = 0;
   int sel = 0;
   int lastShown = 0;
+  int lastPromptLines = 1;
 
   message_poll();
   llm_poll();
@@ -3105,6 +3239,14 @@ int main(){
   bool needRender = true;
 
   auto renderFrame = [&](){
+    if(lastPromptLines > 1){
+      std::cout << ansi::CUU << (lastPromptLines - 1) << "A" << ansi::CHA << 1 << "G";
+      for(int i = 0; i < lastPromptLines; ++i){
+        std::cout << ansi::CLR;
+        if(i + 1 < lastPromptLines) std::cout << "\n";
+      }
+      std::cout << ansi::CUU << (lastPromptLines - 1) << "A" << ansi::CHA << 1 << "G";
+    }
     std::string status = REG.renderStatusPrefix();
     int status_len = displayWidth(status);
 
@@ -3128,6 +3270,13 @@ int main(){
     contextGhost = (haveCand && showInlineSuggestion) ? std::string() : contextGhostFor(prefix);
     auto pathError = detectPathErrorMessage(prefix, cand);
 
+    if(!haveCand && lastShown > 0){
+      std::cout << ansi::CHA << 1 << "G";
+      for(int i = 0; i < lastShown; ++i){ std::cout << "\n" << "\x1b[2K"; }
+      std::cout << ansi::CUU << lastShown << "A" << ansi::CHA << 1 << "G";
+      lastShown = 0;
+    }
+
     std::string annotation = (sel < cand.annotations.size()) ? cand.annotations[sel] : "";
 
     bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled;
@@ -3143,6 +3292,7 @@ int main(){
     std::vector<EllipsisSegment> segments;
     segments.push_back(EllipsisSegment{EllipsisSegmentRole::Buffer, wordInfo.beforeWord, {}});
     size_t cursorSegmentIndex = 0;
+    size_t anchorSegmentIndex = 0;
     size_t wordPrefixGlyphCount = utf8Glyphs(wordInfo.wordBeforeCursor).size();
     size_t cursorGlyphIndex = wordPrefixGlyphCount;
     size_t pathErrorSegmentIndex = std::numeric_limits<size_t>::max();
@@ -3157,11 +3307,13 @@ int main(){
       if(!pathError->empty()){
         segments.push_back(EllipsisSegment{EllipsisSegmentRole::PathErrorDetail, "  +" + *pathError, {}});
       }
+      anchorSegmentIndex = cursorSegmentIndex;
     }else if(showInlineSuggestion){
       const std::string& label = cand.labels[sel];
       const auto& matches = cand.matchPositions[sel];
       auto labelGlyphs = utf8Glyphs(label);
       size_t suggestionCursorGlyph = std::min(wordPrefixGlyphCount, labelGlyphs.size());
+      size_t suggestionSegmentIndex = segments.size();
       if(wordPrefixGlyphCount > 0 && !matches.empty()){
         size_t matchIdx = 0;
         size_t matchedGlyphs = 0;
@@ -3186,18 +3338,23 @@ int main(){
       segments.push_back(EllipsisSegment{EllipsisSegmentRole::InlineSuggestion, label, matches});
       cursorSegmentIndex = segments.size() - 1;
       cursorGlyphIndex = suggestionCursorGlyph;
+      anchorSegmentIndex = cursorSegmentIndex;
       if(!annotation.empty()){
         segments.push_back(EllipsisSegment{EllipsisSegmentRole::Annotation, " " + annotation, {}});
       }
       wordSuffixVisible.clear();
+      if(wordPrefixGlyphCount == 0){
+        cursorSegmentIndex = 0;
+        cursorGlyphIndex = utf8Glyphs(wordInfo.beforeWord).size();
+        anchorSegmentIndex = suggestionSegmentIndex;
+      }
     }else{
       segments.push_back(EllipsisSegment{EllipsisSegmentRole::Buffer, wordInfo.wordBeforeCursor, {}});
       cursorSegmentIndex = segments.size() - 1;
       cursorGlyphIndex = wordPrefixGlyphCount;
+      anchorSegmentIndex = cursorSegmentIndex;
       wordSuffixVisible = wordInfo.wordAfterCursor;
     }
-
-    size_t anchorSegmentIndex = cursorSegmentIndex;
 
     if(!wordSuffixVisible.empty()){
       segments.push_back(EllipsisSegment{EllipsisSegmentRole::Buffer, wordSuffixVisible, {}});
@@ -3209,70 +3366,88 @@ int main(){
       segments.push_back(EllipsisSegment{EllipsisSegmentRole::Ghost, contextGhost, {}});
     }
 
-    auto view = applyWindowEllipsis(segments, EllipsisCursorLocation{cursorSegmentIndex, cursorGlyphIndex},
-                                    leftLimit, rightLimit);
-
-    int printedLeftDots = 0;
-    if(view.leftApplied && view.leftDotWidth > 0){
-      printedLeftDots = view.leftDotWidth;
-      std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
-    }
-
-    int widthBeforeAnchor = printedLeftDots;
-    for(size_t i = 0; i < segments.size(); ++i){
-      if(i >= anchorSegmentIndex) break;
-      const std::string& trimmed = view.trimmedTexts[i];
-      if(trimmed.empty()) continue;
-      widthBeforeAnchor += displayWidth(trimmed);
-    }
-
-    for(size_t i = 0; i < segments.size(); ++i){
-      const std::string& trimmed = view.trimmedTexts[i];
-      if(trimmed.empty()) continue;
-      const auto& seg = segments[i];
-      switch(seg.role){
-        case EllipsisSegmentRole::Buffer:{
-          bool isErrorWord = pathError && i == pathErrorSegmentIndex;
-          std::cout << (isErrorWord ? ansi::RED : ansi::WHITE) << trimmed << ansi::RESET;
-          break;
-        }
-        case EllipsisSegmentRole::InlineSuggestion:{
-          printInlineSuggestionSegment(seg, view, i);
-          break;
-        }
-        case EllipsisSegmentRole::Annotation:
-          std::cout << ansi::GREEN << trimmed << ansi::RESET;
-          break;
-        case EllipsisSegmentRole::PathErrorDetail:
-          std::cout << ansi::YELLOW << trimmed << ansi::RESET;
-          break;
-        case EllipsisSegmentRole::Ghost:
-          std::cout << ansi::GRAY << trimmed << ansi::RESET;
-          break;
-      }
-    }
-
-    int printedRightDots = 0;
-    if(view.rightApplied && view.rightDotWidth > 0){
-      printedRightDots = view.rightDotWidth;
-      std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
-    }
-
-    std::cout.flush();
-
-    int caretWidth = printedLeftDots + view.leftKeptWidth;
-    int cursorCol = baseIndent + caretWidth + 1;
-
-    int suggestionIndent = baseIndent + widthBeforeAnchor;
-    int tailLimit = rightLimit;
-
     if(haveCand){
+      auto view = applyWindowEllipsis(segments, EllipsisCursorLocation{cursorSegmentIndex, cursorGlyphIndex},
+                                      leftLimit, rightLimit);
+
+      int printedLeftDots = 0;
+      if(view.leftApplied && view.leftDotWidth > 0){
+        printedLeftDots = view.leftDotWidth;
+        std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
+      }
+
+      int widthBeforeAnchor = printedLeftDots;
+      for(size_t i = 0; i < segments.size(); ++i){
+        if(i >= anchorSegmentIndex) break;
+        const std::string& trimmed = view.trimmedTexts[i];
+        if(trimmed.empty()) continue;
+        widthBeforeAnchor += displayWidth(trimmed);
+      }
+
+      for(size_t i = 0; i < segments.size(); ++i){
+        const std::string& trimmed = view.trimmedTexts[i];
+        if(trimmed.empty()) continue;
+        const auto& seg = segments[i];
+        switch(seg.role){
+          case EllipsisSegmentRole::Buffer:{
+            bool isErrorWord = pathError && i == pathErrorSegmentIndex;
+            std::cout << (isErrorWord ? ansi::RED : ansi::WHITE) << trimmed << ansi::RESET;
+            break;
+          }
+          case EllipsisSegmentRole::InlineSuggestion:{
+            printInlineSuggestionSegment(seg, view, i);
+            break;
+          }
+          case EllipsisSegmentRole::Annotation:
+            std::cout << ansi::GREEN << trimmed << ansi::RESET;
+            break;
+          case EllipsisSegmentRole::PathErrorDetail:
+            std::cout << ansi::YELLOW << trimmed << ansi::RESET;
+            break;
+          case EllipsisSegmentRole::Ghost:
+            std::cout << ansi::GRAY << trimmed << ansi::RESET;
+            break;
+        }
+      }
+
+      int printedRightDots = 0;
+      if(view.rightApplied && view.rightDotWidth > 0){
+        printedRightDots = view.rightDotWidth;
+        std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
+      }
+
+      std::cout.flush();
+
+      int caretWidth = printedLeftDots + view.leftKeptWidth;
+      int cursorCol = baseIndent + caretWidth + 1;
+
+      int suggestionIndent = baseIndent + widthBeforeAnchor;
+      int tailLimit = rightLimit;
+      if(tailLimit > 0){
+        int indentOffset = std::max(0, suggestionIndent - baseIndent);
+        tailLimit = std::max(1, tailLimit - indentOffset);
+      }
+
+      int lineLimit = std::max(1, rightLimit);
+      int maxCol = baseIndent + lineLimit;
+      if(cursorCol > maxCol) cursorCol = maxCol;
+      if(suggestionIndent > maxCol) suggestionIndent = maxCol;
+
       renderBelowThree(status, status_len, cursorCol, suggestionIndent, cand, sel, lastShown, tailLimit);
+      lastPromptLines = 1;
     }else{
+      int wrapWidth = g_settings.promptInputEllipsisRightWidth;
+      if(wrapWidth <= 0) wrapWidth = 80;
+      auto wrapResult = renderSegmentsWithWrapping(segments, cursorSegmentIndex, cursorGlyphIndex,
+                                                  pathErrorSegmentIndex, baseIndent, wrapWidth);
+      int currentLine = std::max(0, wrapResult.totalLines - 1);
       for(int i=0;i<lastShown;i++){ std::cout<<"\n"<<"\x1b[2K"; }
       if(lastShown>0){ std::cout<<ansi::CUU<<lastShown<<"A"<<ansi::CHA<<1<<"G"; }
-      std::cout<<ansi::CHA<<cursorCol<<"G"<<std::flush;
+      int linesAboveCursor = currentLine - wrapResult.cursorLine;
+      if(linesAboveCursor > 0){ std::cout << ansi::CUU << linesAboveCursor << "A"; }
+      std::cout<<ansi::CHA<<wrapResult.cursorColumn<<"G"<<std::flush;
       lastShown=0;
+      lastPromptLines = wrapResult.totalLines;
     }
 
     needRender = false;
