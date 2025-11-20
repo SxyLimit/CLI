@@ -324,3 +324,19 @@ inline std::string memory_default_root_summary(){
   return "Memory root overview for personal preferences and knowledge notes.";
 }
 
+inline std::filesystem::path memory_event_log_path(const MemoryConfig& cfg){
+  return std::filesystem::path(cfg.root) / "memory_events.jsonl";
+}
+
+inline void memory_append_event(const MemoryConfig& cfg, const std::string& kind, const std::string& detail){
+  std::error_code ec;
+  std::filesystem::create_directories(cfg.root, ec);
+  std::ofstream out(memory_event_log_path(cfg), std::ios::app);
+  if(!out.good()) return;
+  sj::Object obj;
+  obj["ts"] = memory_now_iso();
+  obj["kind"] = kind;
+  obj["detail"] = detail;
+  out << sj::Value(obj).dump() << "\n";
+}
+

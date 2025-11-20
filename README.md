@@ -47,7 +47,7 @@ HOME_PATH=settings
 | `run` | `run <command> [args…]` | 逐项转义后执行任意系统命令，执行期间会暂时恢复终端默认状态以避免交互异常；同样适用于配置文件新增的外部命令。 |
 | `llm` | `llm call <消息…>`<br>`llm recall` 等 | 通过 Python 助手异步调用 Moonshot/Kimi 接口并管理历史会话。 |
 | `message` | `message list`<br>`message last`<br>`message detail <文件>` | 监听 Markdown 通知目录，列出未读文件、查看最近修改的文件，或按文件名读取具体内容。 |
-| `memory` | `memory init/import/list/show/search/stats/note/query …` | 初始化记忆目录，导入个人/知识文档，浏览摘要或基于记忆回答问题。 |
+| `memory` | `memory import/list/show/search/stats/note/query/monitor …` | 导入个人/知识文档，浏览摘要、监控异步导入，或基于记忆回答问题。 |
 | `cd` | `cd <路径>`<br>`cd -o [-a\|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 仅显示目录名，`-c` 恢复完整路径）。 |
 | `ls` | `ls [-a] [-l] [目录]` | 简化版目录列表，支持展示隐藏文件与长列表模式。 |
 | `cat` | `cat <path> [选项]` | 便于人工快速查看文件内容；行为与 Agent 使用的 `fs.read` 保持一致。 |
@@ -130,13 +130,15 @@ HOME_PATH=settings
 
 `memory` 命令围绕 `${home.path}/memory` 目录工作，默认包含固定的 `personal/` 子目录以存放个人档案、偏好与对话记录，也会为常规知识自动维护 `knowledge/` 根目录。所有由工具创建的目录/文件名会自动清洗为仅包含英文字母、数字、`-`、`_` 的安全格式，避免因 UTF-8 特殊字符导致解析异常。
 
-- `memory init`：初始化记忆目录与索引文件，自动确保 `personal/` 与 `knowledge/` 存在。
-- `memory import <src>`：将 `.md/.txt` 文件或目录导入到 `personal/` 或 `knowledge/<category>/` 下，导入后会调用 `tools/memory_build_index.py` 重建摘要索引，并对导入路径逐段做安全命名处理。
+导入命令的源路径补全会限制为 `.md`、`.txt` 文件或目录，并保持 ASCII 安全的命名规则。
+
+- `memory import <src>`：将 `.md/.txt` 文件或目录导入到 `personal/` 或 `knowledge/<category>/` 下，导入会以异步方式执行，提示符前显示黄色 `[I]`（进行中）与红色 `[I]`（完成），同时自动重建摘要索引并对路径逐段做安全命名处理。
 - `memory list [path]`：按目录层级浏览记忆摘要，默认展示根目录下的一级分类和直接文件。
 - `memory show <path>`：查看单个节点的元数据和摘要，可通过 `--content` 读取正文。
 - `memory search <keywords...>`：在摘要或正文中进行关键词检索，支持 `--scope personal|knowledge`。
 - `memory note <text>`：在 `personal/notes/` 下快速追加一条个人 note 并刷新摘要索引。
 - `memory query <question>`：仅基于记忆内容生成回答，执行期间提示符前会显示黄色 `[Q]`，结束后变为红色。
+- `memory monitor`：实时查看异步导入与其他记忆事件的 JSONL 日志，按 `q` 退出监控。
 
 ## LLM 命令使用说明
 

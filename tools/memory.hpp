@@ -7,6 +7,11 @@
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <thread>
+#ifndef _WIN32
+#include <sys/select.h>
+#include <unistd.h>
+#endif
 
 namespace tool {
 
@@ -119,7 +124,6 @@ inline ToolExecutionResult handle_memory_import(const std::vector<std::string>& 
   bool personal = false;
   std::string mode = "copy";
   std::string langOverride;
-  size_t sanitizedCount = 0;
   for(size_t i = 2; i < args.size(); ++i){
     const std::string& tok = args[i];
     if(tok == "--category" && i + 1 < args.size()){
@@ -145,19 +149,38 @@ inline ToolExecutionResult handle_memory_import(const std::vector<std::string>& 
   if(!langOverride.empty()) effective.summaryLang = langOverride;
   ensure_memory_paths(effective, srcPath);
   std::filesystem::path src(srcPath);
+  if(!std::filesystem::exists(src)){
+    g_parse_error_cmd = "memory";
+    return detail::text_result("memory import: source path does not exist\n", 1);
+  }
   if(category.empty()) category = default_category_for(src);
   category = sanitize_memory_component(category);
   if(category.empty()) category = "misc";
   std::filesystem::path destRoot = std::filesystem::path(effective.root) / (personal ? effective.personalSubdir : "knowledge") / category;
-  size_t count = import_from_source(src, destRoot, mode, sanitizedCount);
-  auto res = rebuild_memory_index(effective, effective.summaryLang);
-  std::ostringstream oss;
-  oss << "Imported " << count << " files into " << destRoot << "\n";
-  if(sanitizedCount > 0){
-    oss << "Sanitized " << sanitizedCount << " path component(s) to ASCII-safe names.\n";
-  }
-  oss << res.output;
-  return detail::text_result(oss.str(), res.exitCode);
+  std::ostringstream immediate;
+  immediate << ansi::YELLOW << "[I]" << ansi::RESET << " importing in background -> " << destRoot << " (use memory monitor to follow)\n";
+  std::thread([effective, src, destRoot, mode](){
+    memory_import_indicator_begin();
+    std::ostringstream startDetail;
+    startDetail << "import start: " << src << " -> " << destRoot;
+    memory_append_event(effective, "import_start", startDetail.str());
+    size_t sanitizedCount = 0;
+    size_t count = import_from_source(src, destRoot, mode, sanitizedCount);
+    auto res = rebuild_memory_index(effective, effective.summaryLang);
+    std::ostringstream finishDetail;
+    finishDetail << "import complete: " << src << " -> " << destRoot << " files=" << count << " sanitized=" << sanitizedCount << " exit=" << res.exitCode;
+    memory_append_event(effective, "import_complete", finishDetail.str());
+    std::ostringstream oss;
+    oss << ansi::YELLOW << "[I]" << ansi::RESET << " imported " << count << " files into " << destRoot << "\n";
+    if(sanitizedCount > 0){
+      oss << "Sanitized " << sanitizedCount << " path component(s) to ASCII-safe names.\n";
+    }
+    oss << res.output;
+    oss << ansi::RED << "[I]" << ansi::RESET << " import finished.\n";
+    std::cout << oss.str();
+    memory_import_indicator_complete();
+  }).detach();
+  return detail::text_result(immediate.str());
 }
 
 inline ToolExecutionResult handle_memory_list(const std::vector<std::string>& args, const MemoryConfig& cfg){
@@ -177,7 +200,7 @@ inline ToolExecutionResult handle_memory_list(const std::vector<std::string>& ar
   }
   MemoryIndex index;
   if(!index.load(cfg)){
-    return detail::text_result("memory index missing, run `memory init` first\n", 1);
+    return detail::text_result(std::string("memory index missing at ") + cfg.indexFile + "\n", 1);
   }
   std::ostringstream oss;
   auto scope = scope_from_flag(personalOnly, knowledgeOnly);
@@ -220,7 +243,7 @@ inline ToolExecutionResult handle_memory_show(const std::vector<std::string>& ar
   }
   MemoryIndex index;
   if(!index.load(cfg)){
-    return detail::text_result("memory index missing, run `memory init` first\n", 1);
+    return detail::text_result(std::string("memory index missing at ") + cfg.indexFile + "\n", 1);
   }
   const MemoryNode* node = index.find(target);
   if(!node){
@@ -258,7 +281,7 @@ inline ToolExecutionResult handle_memory_search(const std::vector<std::string>& 
   }
   MemoryIndex index;
   if(!index.load(cfg)){
-    return detail::text_result("memory index missing, run `memory init` first\n", 1);
+    return detail::text_result(std::string("memory index missing at ") + cfg.indexFile + "\n", 1);
   }
   std::string query = join(keywords, " ");
   bool inSummary = (inWhat == "summary" || inWhat == "both");
@@ -275,7 +298,7 @@ inline ToolExecutionResult handle_memory_search(const std::vector<std::string>& 
 inline ToolExecutionResult handle_memory_stats(const MemoryConfig& cfg){
   MemoryIndex index;
   if(!index.load(cfg)){
-    return detail::text_result("memory index missing, run `memory init` first\n", 1);
+    return detail::text_result(std::string("memory index missing at ") + cfg.indexFile + "\n", 1);
   }
   auto st = index.stats();
   std::ostringstream oss;
@@ -345,7 +368,7 @@ inline ToolExecutionResult handle_memory_query(const std::vector<std::string>& a
   }
   MemoryIndex index;
   if(!index.load(cfg)){
-    return detail::text_result("memory index missing, run `memory init` first\n", 1);
+    return detail::text_result(std::string("memory index missing at ") + cfg.indexFile + "\n", 1);
   }
   std::string effectiveScope = scope;
   if(scope == "auto"){
@@ -377,6 +400,69 @@ inline ToolExecutionResult handle_memory_query(const std::vector<std::string>& a
   return detail::text_result(oss.str());
 }
 
+inline std::string summarize_memory_event(const std::string& line){
+  try{
+    sj::Parser parser(line);
+    sj::Value val = parser.parse();
+    if(!val.isObject()) return line;
+    const auto& obj = val.asObject();
+    std::string ts, kind, detail;
+    if(auto it = obj.find("ts"); it != obj.end() && it->second.isString()) ts = it->second.asString();
+    if(auto it = obj.find("kind"); it != obj.end() && it->second.isString()) kind = it->second.asString();
+    if(auto it = obj.find("detail"); it != obj.end() && it->second.isString()) detail = it->second.asString();
+    std::ostringstream oss;
+    if(!ts.empty()) oss << "[" << ts << "] ";
+    if(!kind.empty()) oss << kind;
+    if(!detail.empty()){
+      if(!kind.empty()) oss << ": ";
+      oss << detail;
+    }
+    return oss.str();
+  }catch(...){
+    return line;
+  }
+}
+
+inline ToolExecutionResult handle_memory_monitor(const MemoryConfig& cfg){
+#ifndef _WIN32
+  auto logPath = memory_event_log_path(cfg);
+  std::ifstream stream(logPath);
+  if(!stream.good()){
+    g_parse_error_cmd = "memory";
+    return detail::text_result(std::string("memory monitor: event log missing at ") + logPath.string() + "\n", 1);
+  }
+  std::cout << "[memory] monitoring events from " << logPath << " (press q to quit)" << std::endl;
+  std::string line;
+  bool running = true;
+  while(running){
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+    struct timeval tv{0, 200000};
+    int rc = ::select(STDIN_FILENO + 1, &readfds, nullptr, nullptr, &tv);
+    if(rc > 0 && FD_ISSET(STDIN_FILENO, &readfds)){
+      char ch = 0;
+      if(::read(STDIN_FILENO, &ch, 1) > 0){
+        if(ch == 'q' || ch == 'Q'){
+          running = false;
+          break;
+        }
+      }
+    }
+    while(std::getline(stream, line)){
+      if(line.empty()) continue;
+      std::cout << "[memory] " << summarize_memory_event(line) << std::endl;
+    }
+    if(stream.eof()){
+      stream.clear();
+    }
+  }
+  return detail::text_result("memory monitor stopped\n");
+#else
+  return detail::text_result("memory monitor is not supported on this platform\n", 1);
+#endif
+}
+
 } // namespace
 
 struct Memory {
@@ -387,14 +473,14 @@ struct Memory {
     set_tool_summary_locale(spec, "en", "Manage the MyCLI memory system");
     set_tool_summary_locale(spec, "zh", "管理 MyCLI 记忆系统");
     spec.subs = {
-      SubcommandSpec{"init", {}, {}, {}, nullptr},
-      SubcommandSpec{"import", {}, {positional("<src>")}, {}, nullptr},
+      SubcommandSpec{"import", {}, {positional("<src>", true, PathKind::Any, {".md", ".txt"})}, {}, nullptr},
       SubcommandSpec{"list", {}, {positional("[<path>]")}, {}, nullptr},
-      SubcommandSpec{"show", {}, {positional("<path>")}, {}, nullptr},
+      SubcommandSpec{"show", {}, {positional("<path>", true, PathKind::Any, {}, true)}, {}, nullptr},
       SubcommandSpec{"search", {}, {positional("<keywords...>")}, {}, nullptr},
       SubcommandSpec{"stats", {}, {}, {}, nullptr},
       SubcommandSpec{"note", {}, {positional("<text>")}, {}, nullptr},
-      SubcommandSpec{"query", {}, {positional("<question>")}, {}, nullptr}
+      SubcommandSpec{"query", {}, {positional("<question>")}, {}, nullptr},
+      SubcommandSpec{"monitor", {}, {}, {}, nullptr}
     };
     return spec;
   }
@@ -403,14 +489,13 @@ struct Memory {
     const auto& args = request.tokens;
     if(args.size() < 2){
       g_parse_error_cmd = "memory";
-      return detail::text_result("usage: memory <init|import|list|show|search|stats|note|query>\n", 1);
+      return detail::text_result("usage: memory <import|list|show|search|stats|note|query|monitor>\n", 1);
     }
     MemoryConfig cfg = memory_config_from_settings();
     if(!cfg.enabled){
       return detail::text_result("memory system disabled via settings\n", 1);
     }
     const std::string sub = args[1];
-    if(sub == "init") return handle_memory_init(cfg);
     if(sub == "import") return handle_memory_import(args, cfg);
     if(sub == "list") return handle_memory_list(args, cfg);
     if(sub == "show") return handle_memory_show(args, cfg);
@@ -418,6 +503,7 @@ struct Memory {
     if(sub == "stats") return handle_memory_stats(cfg);
     if(sub == "note") return handle_memory_note(args, cfg);
     if(sub == "query") return handle_memory_query(args, cfg);
+    if(sub == "monitor") return handle_memory_monitor(cfg);
     g_parse_error_cmd = "memory";
     return detail::text_result("unknown memory subcommand\n", 1);
   }

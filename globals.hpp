@@ -358,6 +358,9 @@ PromptIndicatorState prompt_indicator_current(const std::string& id);
 
 void llm_set_pending(bool pending);
 
+void memory_import_indicator_begin();
+void memory_import_indicator_complete();
+
 void agent_indicator_guard_alert_inc();
 void agent_indicator_guard_alert_dec();
 void agent_monitor_set_active(bool active);
