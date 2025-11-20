@@ -6,6 +6,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
@@ -109,6 +110,15 @@ inline bool read_char(char &ch){
   return read == 1;
 }
 
+inline int terminal_width(){
+  CONSOLE_SCREEN_BUFFER_INFO info{};
+  if(GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info)){
+    int width = static_cast<int>(info.srWindow.Right - info.srWindow.Left + 1);
+    if(width > 0) return width;
+  }
+  return 80;
+}
+
 inline void write_stdout(const char* data, size_t len){
   DWORD written = 0;
   WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), data, static_cast<DWORD>(len), &written, nullptr);
@@ -169,6 +179,14 @@ inline int wait_for_input(int timeout_ms){
 inline bool read_char(char &ch){
   ssize_t n = ::read(STDIN_FILENO, &ch, 1);
   return n == 1;
+}
+
+inline int terminal_width(){
+  struct winsize ws{};
+  if(ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0){
+    return static_cast<int>(ws.ws_col);
+  }
+  return 80;
 }
 
 inline void write_stdout(const char* data, size_t len){
@@ -2972,6 +2990,11 @@ int main(){
     renderPromptLabel();
 
     int baseIndent = status_len + promptDisplayWidth();
+    int terminalWidth = std::max(1, platform::terminal_width());
+    int availableWidth = std::max(1, terminalWidth - baseIndent);
+    if(leftLimit >= 0) leftLimit = std::min(leftLimit, availableWidth);
+    if(rightLimit >= 0) rightLimit = std::min(rightLimit, availableWidth);
+    wrapLimit = std::min(wrapLimit, availableWidth);
 
     std::vector<EllipsisSegment> segments;
     segments.push_back(EllipsisSegment{EllipsisSegmentRole::Buffer, wordInfo.beforeWord, {}});
