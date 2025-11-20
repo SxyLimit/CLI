@@ -3384,30 +3384,66 @@ int main(){
         widthBeforeAnchor += displayWidth(trimmed);
       }
 
+      int caretWidth = printedLeftDots;
+      int caretMarkWidth = caretWidth;
+      bool caretPlaced = false;
+      auto placeCaretIfMatch = [&](size_t segIdx, size_t glyphIdx, int widthBeforeGlyph){
+        if(caretPlaced) return;
+        if(segIdx == cursorSegmentIndex && glyphIdx == cursorGlyphIndex){
+          caretPlaced = true;
+          caretMarkWidth = widthBeforeGlyph;
+        }
+      };
+
       for(size_t i = 0; i < segments.size(); ++i){
-        const std::string& trimmed = view.trimmedTexts[i];
-        if(trimmed.empty()) continue;
+        size_t first = view.firstGlyphIndex[i];
+        int count = view.trimmedGlyphCounts[i];
+        const auto& trimmed = view.trimmedTexts[i];
+        if(first == std::numeric_limits<size_t>::max() || count <= 0 || trimmed.empty()) continue;
+
+        placeCaretIfMatch(i, first, caretWidth);
+
         const auto& seg = segments[i];
+        const auto& glyphs = view.segmentGlyphs[i];
+        std::vector<bool> matched;
+        if(seg.role == EllipsisSegmentRole::InlineSuggestion && !seg.matches.empty()){
+          matched = glyphMatchesFor(glyphs, seg.matches);
+        }
         switch(seg.role){
           case EllipsisSegmentRole::Buffer:{
             bool isErrorWord = pathError && i == pathErrorSegmentIndex;
-            std::cout << (isErrorWord ? ansi::RED : ansi::WHITE) << trimmed << ansi::RESET;
+            std::cout << (isErrorWord ? ansi::RED : ansi::WHITE);
             break;
           }
-          case EllipsisSegmentRole::InlineSuggestion:{
-            printInlineSuggestionSegment(seg, view, i);
+          case EllipsisSegmentRole::InlineSuggestion:
             break;
-          }
           case EllipsisSegmentRole::Annotation:
-            std::cout << ansi::GREEN << trimmed << ansi::RESET;
+            std::cout << ansi::GREEN;
             break;
           case EllipsisSegmentRole::PathErrorDetail:
-            std::cout << ansi::YELLOW << trimmed << ansi::RESET;
+            std::cout << ansi::YELLOW;
             break;
           case EllipsisSegmentRole::Ghost:
-            std::cout << ansi::GRAY << trimmed << ansi::RESET;
+            std::cout << ansi::GRAY;
             break;
         }
+
+        for(int j = 0; j < count && first + static_cast<size_t>(j) < glyphs.size(); ++j){
+          size_t gi = first + static_cast<size_t>(j);
+          placeCaretIfMatch(i, gi, caretWidth);
+
+          int w = glyphs[gi].width <= 0 ? 1 : glyphs[gi].width;
+          if(seg.role == EllipsisSegmentRole::InlineSuggestion){
+            bool isMatch = (gi < matched.size() && matched[gi]);
+            std::cout << (isMatch ? ansi::WHITE : ansi::GRAY) << glyphs[gi].bytes;
+          }else{
+            std::cout << glyphs[gi].bytes;
+          }
+          caretWidth += w;
+        }
+
+        placeCaretIfMatch(i, first + static_cast<size_t>(count), caretWidth);
+        std::cout << ansi::RESET;
       }
 
       int printedRightDots = 0;
@@ -3418,8 +3454,7 @@ int main(){
 
       std::cout.flush();
 
-      int caretWidth = printedLeftDots + view.leftKeptWidth;
-      int cursorCol = baseIndent + caretWidth + 1;
+      int cursorCol = baseIndent + (caretPlaced ? caretMarkWidth : (printedLeftDots + view.leftKeptWidth)) + 1;
 
       int suggestionIndent = baseIndent + widthBeforeAnchor;
       int tailLimit = rightLimit;
