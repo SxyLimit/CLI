@@ -3229,6 +3229,13 @@ int main(){
     contextGhost = (haveCand && showInlineSuggestion) ? std::string() : contextGhostFor(prefix);
     auto pathError = detectPathErrorMessage(prefix, cand);
 
+    if(!haveCand && lastShown > 0){
+      std::cout << ansi::CHA << 1 << "G";
+      for(int i = 0; i < lastShown; ++i){ std::cout << "\n" << "\x1b[2K"; }
+      std::cout << ansi::CUU << lastShown << "A" << ansi::CHA << 1 << "G";
+      lastShown = 0;
+    }
+
     std::string annotation = (sel < cand.annotations.size()) ? cand.annotations[sel] : "";
 
     bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled;
