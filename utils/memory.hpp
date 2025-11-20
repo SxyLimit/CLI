@@ -334,9 +334,9 @@ inline void memory_append_event(const MemoryConfig& cfg, const std::string& kind
   std::ofstream out(memory_event_log_path(cfg), std::ios::app);
   if(!out.good()) return;
   sj::Object obj;
-  obj["ts"] = memory_now_iso();
-  obj["kind"] = kind;
-  obj["detail"] = detail;
-  out << sj::Value(obj).dump() << "\n";
+  obj["ts"] = sj::Value(memory_now_iso());
+  obj["kind"] = sj::Value(kind);
+  obj["detail"] = sj::Value(detail);
+  out << sj::dump(sj::Value(obj)) << "\n";
 }
 
