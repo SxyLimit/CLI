@@ -3131,6 +3131,15 @@ int main(){
       auto wrapResult = printWrappedSegments(wrapLimit);
       lastWrappedLines = wrapResult.first;
       cursorCol = wrapResult.second;
+
+      if(lastShown > 0){
+        std::cout << ansi::CHA << 1 << "G";
+        for(int i = 0; i < lastShown; ++i){ std::cout << "\n" << ansi::CLR; }
+        std::cout << ansi::CUU << lastShown << "A";
+        lastShown = 0;
+      }
+
+      std::cout << ansi::CHA << cursorCol << "G" << std::flush;
     }else{
       lastWrappedLines = 0;
       if(view.leftApplied && view.leftDotWidth > 0){
