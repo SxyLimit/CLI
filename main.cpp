@@ -3091,6 +3091,7 @@ int main(){
   size_t cursorByte = 0;
   int sel = 0;
   int lastShown = 0;
+  int lastWrappedLines = 0;
 
   message_poll();
   llm_poll();
@@ -3107,6 +3108,21 @@ int main(){
   auto renderFrame = [&](){
     std::string status = REG.renderStatusPrefix();
     int status_len = displayWidth(status);
+
+    auto clearWrappedLines = [&](){
+      if(lastWrappedLines <= 0) return;
+      std::cout << ansi::CUU << lastWrappedLines << "A" << ansi::CHA << 1 << "G";
+      for(int i = 0; i <= lastWrappedLines; ++i){
+        std::cout << ansi::CLR;
+        if(i < lastWrappedLines) std::cout << "\n";
+      }
+      if(lastWrappedLines > 0){
+        std::cout << ansi::CUU << lastWrappedLines << "A";
+      }
+      lastWrappedLines = 0;
+    };
+
+    clearWrappedLines();
 
     size_t cursorIndex = std::min(cursorByte, buf.size());
     std::string prefix = buf.substr(0, cursorIndex);
@@ -3131,8 +3147,10 @@ int main(){
     std::string annotation = (sel < cand.annotations.size()) ? cand.annotations[sel] : "";
 
     bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled;
-    int leftLimit = ellipsisEnabled ? g_settings.promptInputEllipsisLeftWidth : -1;
-    int rightLimit = ellipsisEnabled ? g_settings.promptInputEllipsisRightWidth : -1;
+    bool applyEllipsis = ellipsisEnabled && haveCand;
+    int leftLimit = applyEllipsis ? g_settings.promptInputEllipsisLeftWidth : -1;
+    int rightLimit = applyEllipsis ? g_settings.promptInputEllipsisRightWidth : -1;
+    int wrapLimit = g_settings.promptInputEllipsisRightWidth;
 
     std::cout << ansi::CLR
               << ansi::WHITE << status << ansi::RESET;
@@ -3212,56 +3230,145 @@ int main(){
     auto view = applyWindowEllipsis(segments, EllipsisCursorLocation{cursorSegmentIndex, cursorGlyphIndex},
                                     leftLimit, rightLimit);
 
-    int printedLeftDots = 0;
-    if(view.leftApplied && view.leftDotWidth > 0){
-      printedLeftDots = view.leftDotWidth;
-      std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
-    }
-
-    int widthBeforeAnchor = printedLeftDots;
-    for(size_t i = 0; i < segments.size(); ++i){
-      if(i >= anchorSegmentIndex) break;
-      const std::string& trimmed = view.trimmedTexts[i];
-      if(trimmed.empty()) continue;
-      widthBeforeAnchor += displayWidth(trimmed);
-    }
-
-    for(size_t i = 0; i < segments.size(); ++i){
-      const std::string& trimmed = view.trimmedTexts[i];
-      if(trimmed.empty()) continue;
-      const auto& seg = segments[i];
-      switch(seg.role){
-        case EllipsisSegmentRole::Buffer:{
-          bool isErrorWord = pathError && i == pathErrorSegmentIndex;
-          std::cout << (isErrorWord ? ansi::RED : ansi::WHITE) << trimmed << ansi::RESET;
+    auto printWrappedSegments = [&](int limit)->std::pair<int, int>{
+      int maxWidth = std::max(1, limit);
+      int currentWidth = 0;
+      int linesUsed = 0;
+      size_t globalGlyphCounter = 0;
+      size_t cursorGlyphGlobalIndex = 0;
+      for(size_t i = 0; i < segments.size(); ++i){
+        if(i < cursorSegmentIndex){
+          cursorGlyphGlobalIndex += view.segmentGlyphs[i].size();
+        }else if(i == cursorSegmentIndex){
+          cursorGlyphGlobalIndex += std::min(cursorGlyphIndex, view.segmentGlyphs[i].size());
+          break;
+        }else{
           break;
         }
-        case EllipsisSegmentRole::InlineSuggestion:{
-          printInlineSuggestionSegment(seg, view, i);
-          break;
-        }
-        case EllipsisSegmentRole::Annotation:
-          std::cout << ansi::GREEN << trimmed << ansi::RESET;
-          break;
-        case EllipsisSegmentRole::PathErrorDetail:
-          std::cout << ansi::YELLOW << trimmed << ansi::RESET;
-          break;
-        case EllipsisSegmentRole::Ghost:
-          std::cout << ansi::GRAY << trimmed << ansi::RESET;
-          break;
       }
-    }
 
+      int caretCol = 0;
+      int colorState = 0;
+      auto flushColor = [&](int next){
+        if(colorState == next) return;
+        if(colorState != 0) std::cout << ansi::RESET;
+        if(next == 1) std::cout << ansi::WHITE;
+        else if(next == 2) std::cout << ansi::GRAY;
+        else if(next == 3) std::cout << ansi::YELLOW;
+        else if(next == 4) std::cout << ansi::RED;
+        colorState = next;
+      };
+
+      auto colorForSegment = [&](size_t idx){
+        const auto& seg = segments[idx];
+        if(seg.role == EllipsisSegmentRole::Buffer){
+          bool isErrorWord = pathError && idx == pathErrorSegmentIndex;
+          return isErrorWord ? 4 : 1;
+        }
+        if(seg.role == EllipsisSegmentRole::PathErrorDetail) return 3;
+        return 2; // Ghost and others default to gray
+      };
+
+      auto newLine = [&](){
+        flushColor(0);
+        std::cout << "\n" << "\x1b[2K";
+        for(int s = 0; s < baseIndent; ++s) std::cout << ' ';
+        currentWidth = 0;
+        linesUsed += 1;
+      };
+
+      for(size_t i = 0; i < segments.size(); ++i){
+        size_t first = view.firstGlyphIndex[i];
+        int count = view.trimmedGlyphCounts[i];
+        if(first == std::numeric_limits<size_t>::max() || count <= 0) continue;
+        const auto& glyphs = view.segmentGlyphs[i];
+        int segColor = colorForSegment(i);
+        for(int j = 0; j < count && first + static_cast<size_t>(j) < glyphs.size(); ++j){
+          const auto& g = glyphs[first + static_cast<size_t>(j)];
+          int w = std::max(1, g.width);
+          if(currentWidth + w > maxWidth){
+            newLine();
+          }
+          if(globalGlyphCounter == cursorGlyphGlobalIndex){
+            caretCol = currentWidth;
+          }
+          flushColor(segColor);
+          std::cout << g.bytes;
+          currentWidth += w;
+          globalGlyphCounter += 1;
+        }
+      }
+
+      if(globalGlyphCounter == cursorGlyphGlobalIndex){
+        caretCol = currentWidth;
+      }
+
+      flushColor(0);
+      return std::make_pair(linesUsed, caretCol + baseIndent + 1);
+    };
+
+    int cursorCol = baseIndent + 1;
+    int printedLeftDots = 0;
     int printedRightDots = 0;
-    if(view.rightApplied && view.rightDotWidth > 0){
-      printedRightDots = view.rightDotWidth;
-      std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
+    int widthBeforeAnchor = 0;
+
+    if(!haveCand && wrapLimit > 0){
+      auto wrapResult = printWrappedSegments(wrapLimit);
+      lastWrappedLines = wrapResult.first;
+      cursorCol = wrapResult.second;
+    }else{
+      lastWrappedLines = 0;
+      if(view.leftApplied && view.leftDotWidth > 0){
+        printedLeftDots = view.leftDotWidth;
+        std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
+      }
+
+      widthBeforeAnchor = printedLeftDots;
+      for(size_t i = 0; i < segments.size(); ++i){
+        if(i >= anchorSegmentIndex) break;
+        const std::string& trimmed = view.trimmedTexts[i];
+        if(trimmed.empty()) continue;
+        widthBeforeAnchor += displayWidth(trimmed);
+      }
+
+      for(size_t i = 0; i < segments.size(); ++i){
+        const std::string& trimmed = view.trimmedTexts[i];
+        if(trimmed.empty()) continue;
+        const auto& seg = segments[i];
+        switch(seg.role){
+          case EllipsisSegmentRole::Buffer:{
+            bool isErrorWord = pathError && i == pathErrorSegmentIndex;
+            std::cout << (isErrorWord ? ansi::RED : ansi::WHITE) << trimmed << ansi::RESET;
+            break;
+          }
+          case EllipsisSegmentRole::InlineSuggestion:{
+            printInlineSuggestionSegment(seg, view, i);
+            break;
+          }
+          case EllipsisSegmentRole::Annotation:
+            std::cout << ansi::GREEN << trimmed << ansi::RESET;
+            break;
+          case EllipsisSegmentRole::PathErrorDetail:
+            std::cout << ansi::YELLOW << trimmed << ansi::RESET;
+            break;
+          case EllipsisSegmentRole::Ghost:
+            std::cout << ansi::GRAY << trimmed << ansi::RESET;
+            break;
+        }
+      }
+
+      if(view.rightApplied && view.rightDotWidth > 0){
+        printedRightDots = view.rightDotWidth;
+        std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
+      }
+
+      std::cout.flush();
+
+      int caretWidth = printedLeftDots + view.leftKeptWidth;
+      cursorCol = baseIndent + caretWidth + 1;
     }
 
     std::cout.flush();
-
-    int caretWidth = printedLeftDots + view.leftKeptWidth;
-    int cursorCol = baseIndent + caretWidth + 1;
 
     int suggestionIndent = baseIndent + widthBeforeAnchor;
     int tailLimit = rightLimit;
