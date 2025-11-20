@@ -9,6 +9,7 @@
 #include "fs_exec.hpp"
 #include "../../utils/agent_state.hpp"
 #include "../../utils/json.hpp"
+#include "../../utils/utf8.hpp"
 
 #include <filesystem>
 #include <fstream>
