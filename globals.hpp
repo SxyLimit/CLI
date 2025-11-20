@@ -252,6 +252,17 @@ enum class SubsequenceStrategy {
   Greedy,
 };
 
+struct MemoryConfig {
+  bool enabled = true;
+  std::string root;
+  std::string indexFile;
+  std::string personalSubdir = "personal";
+  std::string summaryLang;
+  int summaryMinLen = 50;
+  int summaryMaxLen = 100;
+  int maxBootstrapDepth = 1;
+};
+
 struct AppSettings {
   CwdMode cwdMode = CwdMode::Full;
   bool completionIgnoreCase = false;
@@ -269,6 +280,7 @@ struct AppSettings {
   int  historyRecentLimit = 10;
   std::string configHome;
   bool agentExposeFsTools = false;
+  MemoryConfig memory;
 };
 
 extern AppSettings g_settings;
