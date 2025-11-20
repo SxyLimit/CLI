@@ -3375,6 +3375,11 @@ int main(){
       int suggestionIndent = baseIndent + widthBeforeAnchor;
       int tailLimit = rightLimit;
 
+      int lineLimit = std::max(1, rightLimit);
+      int maxCol = baseIndent + lineLimit;
+      if(cursorCol > maxCol) cursorCol = maxCol;
+      if(suggestionIndent > maxCol) suggestionIndent = maxCol;
+
       renderBelowThree(status, status_len, cursorCol, suggestionIndent, cand, sel, lastShown, tailLimit);
       lastPromptLines = 1;
     }else{
