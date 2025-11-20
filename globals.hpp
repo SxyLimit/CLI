@@ -360,6 +360,7 @@ void llm_set_pending(bool pending);
 
 void memory_import_indicator_begin();
 void memory_import_indicator_complete();
+void memory_import_indicator_mark_seen();
 
 void agent_indicator_guard_alert_inc();
 void agent_indicator_guard_alert_dec();

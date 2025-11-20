@@ -946,6 +946,12 @@ void memory_import_indicator_complete(){
   memory_import_indicator_refresh();
 }
 
+void memory_import_indicator_mark_seen(){
+  g_memory_import_running.store(0, std::memory_order_relaxed);
+  g_memory_import_recent_complete.store(false, std::memory_order_relaxed);
+  memory_import_indicator_refresh();
+}
+
 static void persist_home_path_to_env(const std::string& path){
   const std::filesystem::path envPath = resolve_env_file_path();
   std::ifstream in(envPath);

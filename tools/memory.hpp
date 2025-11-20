@@ -601,10 +601,26 @@ inline ToolExecutionResult handle_memory_monitor(const MemoryConfig& cfg){
   std::cout << " (press q to quit)" << std::endl;
   std::string line;
   bool running = true;
-  auto pump_stream = [](std::ifstream& streamRef, auto formatter){
+  auto is_import_complete = [](const std::string& input){
+    try{
+      sj::Parser parser(input);
+      sj::Value val = parser.parse();
+      if(!val.isObject()) return false;
+      const auto& obj = val.asObject();
+      if(auto it = obj.find("kind"); it != obj.end() && it->second.isString()){
+        return it->second.asString() == "import_complete";
+      }
+      return false;
+    }catch(...){
+      return false;
+    }
+  };
+  bool sawImportComplete = false;
+  auto pump_stream = [&](std::ifstream& streamRef, auto formatter, bool checkComplete){
     std::string innerLine;
     while(std::getline(streamRef, innerLine)){
       if(innerLine.empty()) continue;
+      if(checkComplete && is_import_complete(innerLine)) sawImportComplete = true;
       std::cout << "[memory] " << formatter(innerLine) << std::endl;
     }
     if(streamRef.eof()) streamRef.clear();
@@ -624,9 +640,10 @@ inline ToolExecutionResult handle_memory_monitor(const MemoryConfig& cfg){
         }
       }
     }
-    if(stream.good()) pump_stream(stream, summarize_memory_event);
-    if(llmStream.good()) pump_stream(llmStream, summarize_memory_llm_entry);
+    if(stream.good()) pump_stream(stream, summarize_memory_event, /*checkComplete=*/true);
+    if(llmStream.good()) pump_stream(llmStream, summarize_memory_llm_entry, /*checkComplete=*/false);
   }
+  if(sawImportComplete) memory_import_indicator_mark_seen();
   return detail::text_result("memory monitor stopped\n");
 #else
   return detail::text_result("memory monitor is not supported on this platform\n", 1);
