@@ -252,6 +252,17 @@ enum class SubsequenceStrategy {
   Greedy,
 };
 
+struct MemoryConfig {
+  bool enabled = true;
+  std::string root;
+  std::string indexFile;
+  std::string personalSubdir = "personal";
+  std::string summaryLang;
+  int summaryMinLen = 50;
+  int summaryMaxLen = 100;
+  int maxBootstrapDepth = 1;
+};
+
 struct AppSettings {
   CwdMode cwdMode = CwdMode::Full;
   bool completionIgnoreCase = false;
@@ -269,6 +280,7 @@ struct AppSettings {
   int  historyRecentLimit = 10;
   std::string configHome;
   bool agentExposeFsTools = false;
+  MemoryConfig memory;
 };
 
 extern AppSettings g_settings;
@@ -345,6 +357,10 @@ void update_prompt_indicator(const std::string& id, const PromptIndicatorState& 
 PromptIndicatorState prompt_indicator_current(const std::string& id);
 
 void llm_set_pending(bool pending);
+
+void memory_import_indicator_begin();
+void memory_import_indicator_complete();
+void memory_import_indicator_mark_seen();
 
 void agent_indicator_guard_alert_inc();
 void agent_indicator_guard_alert_dec();

@@ -47,6 +47,7 @@ HOME_PATH=settings
 | `run` | `run <command> [args…]` | 逐项转义后执行任意系统命令，执行期间会暂时恢复终端默认状态以避免交互异常；同样适用于配置文件新增的外部命令。 |
 | `llm` | `llm call <消息…>`<br>`llm recall` 等 | 通过 Python 助手异步调用 Moonshot/Kimi 接口并管理历史会话。 |
 | `message` | `message list`<br>`message last`<br>`message detail <文件>` | 监听 Markdown 通知目录，列出未读文件、查看最近修改的文件，或按文件名读取具体内容。 |
+| `memory` | `memory import/list/show/search/stats/note/query/monitor …` | 导入个人/知识文档，浏览摘要、监控异步导入，或基于记忆回答问题。 |
 | `cd` | `cd <路径>`<br>`cd -o [-a\|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 仅显示目录名，`-c` 恢复完整路径）。 |
 | `ls` | `ls [-a] [-l] [目录]` | 简化版目录列表，支持展示隐藏文件与长列表模式。 |
 | `cat` | `cat <path> [选项]` | 便于人工快速查看文件内容；行为与 Agent 使用的 `fs.read` 保持一致。 |
@@ -95,6 +96,14 @@ HOME_PATH=settings
 | `prompt.input_ellipsis.right_width` | 非负整数 | `50` | 整体视窗的最大宽度，仅在启用省略号时生效。 |
 | `history.recent_limit` | 非负整数 | `10` | 历史记录最多保留的条目数。 |
 | `agent.fs_tools.expose` | `true` / `false` | `false` | 是否在 CLI 中暴露 `fs.read` / `fs.write` / `fs.create` / `fs.tree` 命令及其补全。 |
+| `memory.enabled` | `true` / `false` | `true` | 是否启用 Memory 系统。 |
+| `memory.root` | 目录路径 | `${home.path}/memory` | Memory 根目录。 |
+| `memory.index_file` | 文件路径 | `${memory.root}/memory_index.jsonl` | 目录/文件摘要索引。 |
+| `memory.personal_subdir` | 字符串 | `personal` | 个人记忆子目录名称。 |
+| `memory.summary.lang` | 语言代码 | 同 `language` | 摘要生成语言。 |
+| `memory.summary.min_len` | 非负整数 | `50` | 摘要最短长度（字符）。 |
+| `memory.summary.max_len` | 非负整数 | `100` | 摘要最长长度（字符）。 |
+| `memory.max_bootstrap_depth` | 非负整数 | `1` | Agent 启动时默认暴露的最大层级。 |
 
 当设置值来自文件路径时，CLI 会根据键定义的路径类型（文件或目录）与允许后缀自动筛选候选项，避免误选不受支持的文件。
 
@@ -115,6 +124,21 @@ HOME_PATH=settings
 - `setting set history.recent_limit <数量>`：调整历史指令最多保留的条目数（默认 10，设为 0 可禁用历史记录）。
 - `setting set agent.fs_tools.expose <true|false>`：是否在 CLI 中暴露 `fs.read` / `fs.write` / `fs.create` / `fs.tree` 命令。默认 `false`（仅 Agent 调用），设为 `true` 后可手动运行并恢复补全/帮助。
 - `setting set prompt.theme_art_path.<theme> <path>`：为指定主题配置图片结构化文本路径（例如 `prompt.theme_art_path.red-yellow`），仅接受 `.climg` 文件并在补全时只展示目录与 `.climg` 文件；搭配 `tools/image_to_art.py` 生成即可在 `show MyCLI` 中显示彩色图片（旧版本的 `prompt.theme_art_path` 仍作为 `prompt.theme_art_path.blue-purple` 的别名保留）。
+- Memory 设置：可使用 `setting set memory.root <目录>`、`memory.index_file`、`memory.personal_subdir`、`memory.summary.lang` 等键管理记忆系统的目录与摘要参数。
+
+## Memory 命令使用说明
+
+`memory` 命令围绕 `${home.path}/memory` 目录工作，默认包含固定的 `personal/` 子目录以存放个人档案、偏好与对话记录，也会为常规知识自动维护 `knowledge/` 根目录。所有由工具创建的目录/文件名会自动清洗为仅包含英文字母、数字、`-`、`_` 的安全格式，避免因 UTF-8 特殊字符导致解析异常；导入 `.md/.txt` 时还会按标题与长度切分为统一颗粒度的片段，避免超长文档影响检索与摘要质量。
+
+导入命令的源路径补全会限制为 `.md`、`.txt` 文件或目录，并保持 ASCII 安全的命名规则。
+
+- `memory import <src>`：将 `.md/.txt` 文件或目录导入到 `personal/` 或 `knowledge/<category>/` 下，导入会以异步方式执行，提示符前显示黄色 `[I]`（进行中）与红色 `[I]`（完成），自动重建摘要索引、对路径逐段做安全命名，并将长文档按标题构建层级文件夹（文件名来自各级标题而非 `-pX` 后缀），在同一文件树内生成含义清晰的分节文件以统一颗粒度。
+- `memory list [path]`：按目录层级浏览记忆摘要，默认展示根目录下的一级分类和直接文件。
+- `memory show <path>`：查看单个节点的元数据和摘要，可通过 `--content` 读取正文。
+- `memory search <keywords...>`：在摘要或正文中进行关键词检索，支持 `--scope personal|knowledge`。
+- `memory note <text>`：在 `personal/notes/` 下快速追加一条个人 note 并刷新摘要索引。
+- `memory query <question>`：仅基于记忆内容生成回答，执行期间提示符前会显示黄色 `[Q]`，结束后变为红色。
+- `memory monitor`：实时查看异步导入与其他记忆事件的 JSONL 日志（含模型摘要的 system/user prompt 与返回文本），按 `q` 退出监控。所有 Memory 相关的 LLM 调用也会写入 `${memory.root}/memory_llm_calls.jsonl` 便于排查。
 
 ## LLM 命令使用说明
 

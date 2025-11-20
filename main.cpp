@@ -244,6 +244,8 @@ static std::atomic<int> g_agent_pending_sessions{0};
 static std::atomic<int> g_agent_guard_alerts{0};
 static std::atomic<bool> g_agent_guard_blink_phase{false};
 static std::atomic<bool> g_agent_monitor_active{false};
+static std::atomic<int> g_memory_import_running{0};
+static std::atomic<bool> g_memory_import_recent_complete{false};
 
 static void agent_indicator_refresh_state(){
   PromptIndicatorState state = prompt_indicator_current("agent");
@@ -914,6 +916,40 @@ void llm_set_pending(bool pending){
     state.textColor = ansi::WHITE;
   }
   update_prompt_indicator("llm", state);
+}
+
+static void memory_import_indicator_refresh(){
+  PromptIndicatorState state = prompt_indicator_current("memoryImport");
+  state.text = "I";
+  bool running = g_memory_import_running.load(std::memory_order_relaxed) > 0;
+  bool recent = g_memory_import_recent_complete.load(std::memory_order_relaxed);
+  state.visible = running || recent;
+  if(running){
+    state.textColor = ansi::YELLOW;
+  }else if(recent){
+    state.textColor = ansi::RED;
+  }else{
+    state.textColor = ansi::WHITE;
+  }
+  update_prompt_indicator("memoryImport", state);
+}
+
+void memory_import_indicator_begin(){
+  g_memory_import_running.store(1, std::memory_order_relaxed);
+  g_memory_import_recent_complete.store(false, std::memory_order_relaxed);
+  memory_import_indicator_refresh();
+}
+
+void memory_import_indicator_complete(){
+  g_memory_import_running.store(0, std::memory_order_relaxed);
+  g_memory_import_recent_complete.store(true, std::memory_order_relaxed);
+  memory_import_indicator_refresh();
+}
+
+void memory_import_indicator_mark_seen(){
+  g_memory_import_running.store(0, std::memory_order_relaxed);
+  g_memory_import_recent_complete.store(false, std::memory_order_relaxed);
+  memory_import_indicator_refresh();
 }
 
 static void persist_home_path_to_env(const std::string& path){
@@ -3016,6 +3052,7 @@ int main(){
   register_prompt_indicator(PromptIndicatorDescriptor{"message", "M"});
   register_prompt_indicator(PromptIndicatorDescriptor{"llm", "L"});
   register_prompt_indicator(PromptIndicatorDescriptor{"agent", "A"});
+  register_prompt_indicator(PromptIndicatorDescriptor{"memoryImport", "I"});
   agent_indicator_clear();
 
   // 1) 注册内置工具与状态

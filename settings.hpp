@@ -53,6 +53,14 @@ const std::map<std::string, SettingKeyInfo>& keyInfoMap(){
     {"agent.fs_tools.expose", {SettingValueKind::Boolean, {"false", "true"}}},
     {"home.path", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
     {"history.recent_limit", {SettingValueKind::String, {}}},
+    {"memory.enabled", {SettingValueKind::Boolean, {"false", "true"}}},
+    {"memory.root", {SettingValueKind::String, {}, true, PathKind::Dir, {}, true}},
+    {"memory.index_file", {SettingValueKind::String, {}, true, PathKind::File, {}, true}},
+    {"memory.personal_subdir", {SettingValueKind::String, {}}},
+    {"memory.summary.lang", {SettingValueKind::String, {}}},
+    {"memory.summary.min_len", {SettingValueKind::String, {}}},
+    {"memory.summary.max_len", {SettingValueKind::String, {}}},
+    {"memory.max_bootstrap_depth", {SettingValueKind::String, {}}},
   };
   return infos;
 }
@@ -186,16 +194,38 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
         out = {"20", "30", "50", "60"};
       }else if(key=="history.recent_limit"){
         out = {"5", "10", "20", "50"};
+      }else if(key=="memory.summary.min_len" || key=="memory.summary.max_len"){
+        out = {"50", "80", "100"};
       }
       break;
   }
   return out;
 }
 
+inline void apply_memory_defaults_after_load(){
+  if(g_settings.memory.root.empty()){
+    g_settings.memory.root = config_home() + "/memory";
+  }
+  if(g_settings.memory.indexFile.empty()){
+    g_settings.memory.indexFile = g_settings.memory.root + "/memory_index.jsonl";
+  }
+  if(g_settings.memory.summaryLang.empty()){
+    g_settings.memory.summaryLang = g_settings.language;
+  }
+  if(g_settings.memory.personalSubdir.empty()){
+    g_settings.memory.personalSubdir = "personal";
+  }
+  if(g_settings.memory.summaryMinLen <= 0) g_settings.memory.summaryMinLen = 50;
+  if(g_settings.memory.summaryMaxLen <= 0) g_settings.memory.summaryMaxLen = 100;
+  if(g_settings.memory.maxBootstrapDepth <= 0) g_settings.memory.maxBootstrapDepth = 1;
+}
+
 inline void load_settings(const std::string& path){
   AppSettings defaults;
   g_settings = defaults;
   g_settings.configHome = config_home();
+
+  apply_memory_defaults_after_load();
 
   settings_register_language("en");
   settings_register_language("zh");
@@ -281,9 +311,36 @@ inline void load_settings(const std::string& path){
           history_apply_limit();
         }catch(...){
         }
+      }else if(key=="memory.enabled"){
+        bool b; if(parseBool(val, b)) g_settings.memory.enabled = b;
+      }else if(key=="memory.root"){
+        g_settings.memory.root = val;
+      }else if(key=="memory.index_file"){
+        g_settings.memory.indexFile = val;
+      }else if(key=="memory.personal_subdir"){
+        g_settings.memory.personalSubdir = val;
+      }else if(key=="memory.summary.lang"){
+        g_settings.memory.summaryLang = val;
+      }else if(key=="memory.summary.min_len"){
+        try{
+          g_settings.memory.summaryMinLen = std::stoi(val);
+        }catch(...){
+        }
+      }else if(key=="memory.summary.max_len"){
+        try{
+          g_settings.memory.summaryMaxLen = std::stoi(val);
+        }catch(...){
+        }
+      }else if(key=="memory.max_bootstrap_depth"){
+        try{
+          g_settings.memory.maxBootstrapDepth = std::stoi(val);
+        }catch(...){
+        }
       }
     }
   }
+
+  apply_memory_defaults_after_load();
 
   if(desiredHome && *desiredHome != g_settings.configHome){
     std::string err;
@@ -323,6 +380,14 @@ inline void save_settings(const std::string& path){
   for(const std::string& themeKey : {std::string("blue"), std::string("blue-purple"), std::string("red-yellow"), std::string("purple-orange")}){
     out << "prompt.theme_art_path." << themeKey << "=" << pathForTheme(themeKey) << "\n";
   }
+  out << "memory.enabled=" << (g_settings.memory.enabled ? "true" : "false") << "\n";
+  out << "memory.root=" << g_settings.memory.root << "\n";
+  out << "memory.index_file=" << g_settings.memory.indexFile << "\n";
+  out << "memory.personal_subdir=" << g_settings.memory.personalSubdir << "\n";
+  out << "memory.summary.lang=" << g_settings.memory.summaryLang << "\n";
+  out << "memory.summary.min_len=" << g_settings.memory.summaryMinLen << "\n";
+  out << "memory.summary.max_len=" << g_settings.memory.summaryMaxLen << "\n";
+  out << "memory.max_bootstrap_depth=" << g_settings.memory.maxBootstrapDepth << "\n";
 }
 
 inline void apply_settings_to_runtime(){
@@ -375,6 +440,38 @@ inline bool settings_get_value(const std::string& key, std::string& value){
   }
   if(key=="agent.fs_tools.expose"){
     value = g_settings.agentExposeFsTools ? "true" : "false";
+    return true;
+  }
+  if(key=="memory.enabled"){
+    value = g_settings.memory.enabled ? "true" : "false";
+    return true;
+  }
+  if(key=="memory.root"){
+    value = g_settings.memory.root;
+    return true;
+  }
+  if(key=="memory.index_file"){
+    value = g_settings.memory.indexFile;
+    return true;
+  }
+  if(key=="memory.personal_subdir"){
+    value = g_settings.memory.personalSubdir;
+    return true;
+  }
+  if(key=="memory.summary.lang"){
+    value = g_settings.memory.summaryLang;
+    return true;
+  }
+  if(key=="memory.summary.min_len"){
+    value = std::to_string(g_settings.memory.summaryMinLen);
+    return true;
+  }
+  if(key=="memory.summary.max_len"){
+    value = std::to_string(g_settings.memory.summaryMaxLen);
+    return true;
+  }
+  if(key=="memory.max_bootstrap_depth"){
+    value = std::to_string(g_settings.memory.maxBootstrapDepth);
     return true;
   }
   if(key=="prompt.theme_art_path"){
@@ -439,6 +536,9 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     }
     g_settings.language = value;
     settings_register_language(value);
+    if(g_settings.memory.summaryLang.empty()){
+      g_settings.memory.summaryLang = value;
+    }
     return true;
   }
   if(key=="ui.path_error_hint"){
@@ -526,6 +626,69 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     g_settings.agentExposeFsTools = b;
     return true;
   }
+  if(key=="memory.enabled"){
+    bool b;
+    if(!parseBool(value, b)){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.enabled = b;
+    return true;
+  }
+  if(key=="memory.root"){
+    if(value.empty()){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.root = value;
+    apply_memory_defaults_after_load();
+    return true;
+  }
+  if(key=="memory.index_file"){
+    if(value.empty()){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.indexFile = value;
+    return true;
+  }
+  if(key=="memory.personal_subdir"){
+    if(value.empty()){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.personalSubdir = value;
+    return true;
+  }
+  if(key=="memory.summary.lang"){
+    if(value.empty()){
+      error = "invalid_value";
+      return false;
+    }
+    g_settings.memory.summaryLang = value;
+    settings_register_language(value);
+    return true;
+  }
+  if(key=="memory.summary.min_len" || key=="memory.summary.max_len" || key=="memory.max_bootstrap_depth"){
+    int v = 0;
+    try{
+      size_t idx = 0;
+      v = std::stoi(value, &idx);
+      if(idx != value.size()) throw std::invalid_argument("extra");
+    }catch(...){
+      error = "invalid_value";
+      return false;
+    }
+    if(key=="memory.summary.min_len"){
+      g_settings.memory.summaryMinLen = v;
+    }else if(key=="memory.summary.max_len"){
+      g_settings.memory.summaryMaxLen = v;
+    }else{
+      g_settings.memory.maxBootstrapDepth = v;
+    }
+    apply_memory_defaults_after_load();
+    return true;
+  }
   if(key=="prompt.theme_art_path"){
     if(!value_matches_allowed_extensions(settings_key_info(key), value)){
       error = "invalid_value";
@@ -554,6 +717,7 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
       return false;
     }
     g_settings.configHome = config_home();
+    apply_memory_defaults_after_load();
     return true;
   }
   error = "unknown_key";
