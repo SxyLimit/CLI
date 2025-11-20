@@ -1901,20 +1901,26 @@ static EllipsisComputationResult applyTailEllipsis(const std::vector<EllipsisSeg
   std::vector<int> keptIndices;
   keptIndices.reserve(glyphs.size());
   int keptWidth = 0;
-  for(int idx = static_cast<int>(glyphs.size()) - 1; idx >= 0; --idx){
-    keptIndices.push_back(idx);
-    keptWidth += glyphs[static_cast<size_t>(idx)].glyph.width;
-    if(keptWidth >= maxWidth) break;
+  bool truncated = false;
+  for(size_t idx = 0; idx < glyphs.size(); ++idx){
+    int w = glyphs[idx].glyph.width;
+    if(keptWidth + w > maxWidth){
+      truncated = true;
+      break;
+    }
+    keptIndices.push_back(static_cast<int>(idx));
+    keptWidth += w;
   }
-  std::reverse(keptIndices.begin(), keptIndices.end());
-  while(keptWidth > maxWidth && !keptIndices.empty()){
-    int frontIdx = keptIndices.front();
-    keptWidth -= glyphs[static_cast<size_t>(frontIdx)].glyph.width;
-    keptIndices.erase(keptIndices.begin());
+
+  result.dotWidth = truncated ? std::min(3, maxWidth) : 0;
+  while(truncated && keptWidth + result.dotWidth > maxWidth && !keptIndices.empty()){
+    int lastIdx = keptIndices.back();
+    keptWidth -= glyphs[static_cast<size_t>(lastIdx)].glyph.width;
+    keptIndices.pop_back();
   }
-  if(keptIndices.empty()){
-    keptIndices.push_back(static_cast<int>(glyphs.size()) - 1);
-    keptWidth = glyphs.back().glyph.width;
+
+  if(keptIndices.empty() && truncated){
+    result.dotWidth = maxWidth;
   }
 
   for(int idx : keptIndices){
@@ -1927,7 +1933,6 @@ static EllipsisComputationResult applyTailEllipsis(const std::vector<EllipsisSeg
   }
 
   result.keptWidth = keptWidth;
-  result.dotWidth = maxWidth - keptWidth;
   if(result.dotWidth < 0) result.dotWidth = 0;
   return result;
 }
@@ -2845,11 +2850,6 @@ static std::string renderHighlightedLabelWithTailEllipsis(const std::string& lab
   }
   auto matched = glyphMatchesFor(glyphs, matches);
   std::string out;
-  if(result.dotWidth > 0){
-    out += ansi::GRAY;
-    out += std::string(static_cast<size_t>(result.dotWidth), '.');
-    out += ansi::RESET;
-  }
   int state = 0;
   auto flush = [&](int next){
     if(state == next) return;
@@ -2865,6 +2865,11 @@ static std::string renderHighlightedLabelWithTailEllipsis(const std::string& lab
     out += glyphs[gi].bytes;
   }
   flush(0);
+  if(result.dotWidth > 0){
+    out += ansi::GRAY;
+    out += std::string(static_cast<size_t>(result.dotWidth), '.');
+    out += ansi::RESET;
+  }
   return out;
 }
 
@@ -2919,11 +2924,6 @@ static std::string renderCandidateLineWithTailEllipsis(const std::string& label,
   auto view = applyTailEllipsis(segments, maxWidth);
 
   std::string out;
-  if(view.applied && view.dotWidth > 0){
-    out += ansi::GRAY;
-    out += std::string(static_cast<size_t>(view.dotWidth), '.');
-    out += ansi::RESET;
-  }
 
   for(size_t i = 0; i < segments.size(); ++i){
     const auto& seg = segments[i];
@@ -2970,6 +2970,12 @@ static std::string renderCandidateLineWithTailEllipsis(const std::string& label,
         out += ansi::RESET;
       }
     }
+  }
+
+  if(view.applied && view.dotWidth > 0){
+    out += ansi::GRAY;
+    out += std::string(static_cast<size_t>(view.dotWidth), '.');
+    out += ansi::RESET;
   }
 
   return out;
