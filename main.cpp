@@ -2918,44 +2918,77 @@ static void renderInputWithGhost(const std::string& status, int status_len,
 
 static std::string renderHighlightedLabelWithTailEllipsis(const std::string& label,
                                                           const std::vector<int>& matches,
-                                                          int maxWidth){
-  if(maxWidth <= 0) return renderHighlightedLabel(label, matches);
+                                                          int maxWidth,
+                                                          const std::string& annotation){
+  if(maxWidth <= 0){
+    std::string line = renderHighlightedLabel(label, matches);
+    if(!annotation.empty()){
+      line += " ";
+      line += ansi::GREEN;
+      line += annotation;
+      line += ansi::RESET;
+    }
+    return line;
+  }
+
   std::vector<EllipsisSegment> segments;
   segments.push_back(EllipsisSegment{EllipsisSegmentRole::InlineSuggestion, label, matches});
+  if(!annotation.empty()){
+    segments.push_back(EllipsisSegment{EllipsisSegmentRole::Annotation, " " + annotation, {}});
+  }
+
   auto result = applyTailEllipsis(segments, maxWidth);
   if(!result.applied){
-    return renderHighlightedLabel(label, matches);
+    std::string line = renderHighlightedLabel(label, matches);
+    if(!annotation.empty()){
+      line += " ";
+      line += ansi::GREEN;
+      line += annotation;
+      line += ansi::RESET;
+    }
+    return line;
   }
-  auto glyphs = utf8Glyphs(label);
-  size_t first = (segments.size() > 0) ? result.firstGlyphIndex[0] : std::numeric_limits<size_t>::max();
-  int count = (segments.size() > 0) ? result.trimmedGlyphCounts[0] : 0;
-  if(first == std::numeric_limits<size_t>::max() || count <= 0){
-    std::string dots = std::string(static_cast<size_t>(std::max(0, result.dotWidth)), '.');
-    if(dots.empty()) return std::string();
-    return ansi::GRAY + dots + ansi::RESET;
-  }
-  auto matched = glyphMatchesFor(glyphs, matches);
+
   std::string out;
   if(result.dotWidth > 0){
     out += ansi::GRAY;
     out += std::string(static_cast<size_t>(result.dotWidth), '.');
     out += ansi::RESET;
   }
-  int state = 0;
-  auto flush = [&](int next){
-    if(state == next) return;
-    if(state != 0) out += ansi::RESET;
-    if(next == 1) out += ansi::WHITE;
-    else if(next == 2) out += ansi::GRAY;
-    state = next;
-  };
-  for(int j = 0; j < count && first + static_cast<size_t>(j) < glyphs.size(); ++j){
-    size_t gi = first + static_cast<size_t>(j);
-    bool isMatch = (gi < matched.size() && matched[gi]);
-    flush(isMatch ? 1 : 2);
-    out += glyphs[gi].bytes;
+
+  if(!segments.empty()){
+    size_t first = result.firstGlyphIndex[0];
+    int count = result.trimmedGlyphCounts[0];
+    auto glyphs = utf8Glyphs(label);
+    if(first != std::numeric_limits<size_t>::max() && count > 0){
+      auto matched = glyphMatchesFor(glyphs, matches);
+      int state = 0;
+      auto flush = [&](int next){
+        if(state == next) return;
+        if(state != 0) out += ansi::RESET;
+        if(next == 1) out += ansi::WHITE;
+        else if(next == 2) out += ansi::GRAY;
+        state = next;
+      };
+      for(int j = 0; j < count && first + static_cast<size_t>(j) < glyphs.size(); ++j){
+        size_t gi = first + static_cast<size_t>(j);
+        bool isMatch = (gi < matched.size() && matched[gi]);
+        flush(isMatch ? 1 : 2);
+        out += glyphs[gi].bytes;
+      }
+      flush(0);
+    }
   }
-  flush(0);
+
+  if(segments.size() > 1){
+    const std::string& trimmed = result.trimmedTexts[1];
+    if(!trimmed.empty()){
+      out += ansi::GREEN;
+      out += trimmed;
+      out += ansi::RESET;
+    }
+  }
+
   return out;
 }
 
@@ -2999,14 +3032,8 @@ static void renderBelowThree(const std::string& status, int status_len,
     size_t idx = static_cast<size_t>((sel + i) % total);
     const std::string& label = cand.labels[idx];
     const std::vector<int>& matches = cand.matchPositions[idx];
-    std::string line = renderHighlightedLabelWithTailEllipsis(label, matches, tailLimit);
     std::string annotation = (idx < cand.annotations.size()) ? cand.annotations[idx] : "";
-    if(!annotation.empty()){
-      line += " ";
-      line += ansi::GREEN;
-      line += annotation;
-      line += ansi::RESET;
-    }
+    std::string line = renderHighlightedLabelWithTailEllipsis(label, matches, tailLimit, annotation);
     std::cout << "\n" << "\x1b[2K";
     for(int s = 0; s < indent; ++s) std::cout << ' ';
     std::cout << line;
@@ -3374,6 +3401,10 @@ int main(){
 
       int suggestionIndent = baseIndent + widthBeforeAnchor;
       int tailLimit = rightLimit;
+      if(tailLimit > 0){
+        int indentOffset = std::max(0, suggestionIndent - baseIndent);
+        tailLimit = std::max(1, tailLimit - indentOffset);
+      }
 
       int lineLimit = std::max(1, rightLimit);
       int maxCol = baseIndent + lineLimit;
