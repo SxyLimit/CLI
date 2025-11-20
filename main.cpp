@@ -3339,6 +3339,10 @@ int main(){
         segments.push_back(EllipsisSegment{EllipsisSegmentRole::Annotation, " " + annotation, {}});
       }
       wordSuffixVisible.clear();
+      if(wordPrefixGlyphCount == 0){
+        cursorSegmentIndex = 0;
+        cursorGlyphIndex = utf8Glyphs(wordInfo.beforeWord).size();
+      }
     }else{
       segments.push_back(EllipsisSegment{EllipsisSegmentRole::Buffer, wordInfo.wordBeforeCursor, {}});
       cursorSegmentIndex = segments.size() - 1;
