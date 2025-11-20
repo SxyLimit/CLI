@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
+from llm import call_openai
+
 SUPPORTED_SUFFIXES = {".md", ".txt"}
 
 
@@ -23,6 +25,44 @@ def summarize_text(text: str, min_len: int, max_len: int) -> str:
         cleaned = (cleaned + " ") * ((min_len // max_len) + 1)
         cleaned = cleaned[:min_len]
     return cleaned
+
+
+def llm_summary(prompt: str, fallback: str, *, temperature: float = 0.4) -> str:
+    messages = [
+        {
+            "role": "system",
+            "content": "你是一名严谨的记忆摘要助手，需要按照用户的格式要求输出精简摘要。",
+        },
+        {"role": "user", "content": prompt},
+    ]
+    reply = call_openai(messages, temperature=temperature, fallback=fallback)
+    text = reply.strip()
+    if text.startswith("[stub]") or text.startswith("[error]"):
+        return fallback
+    return text
+
+
+def summarize_with_llm(content: str, lang: str, min_len: int, max_len: int, *, kind: str) -> str:
+    if not content.strip():
+        return summarize_text(content, min_len, max_len)
+    safe_content = content[:8000]
+    fallback = summarize_text(content, min_len, max_len)
+    system_lang = lang or "zh"
+    prompt = (
+        f"你是一名记忆管理助手，请阅读下面的{kind}内容，"
+        f"用{system_lang}撰写一个{min_len}-{max_len}字的摘要。"
+        "摘要需直述主题范围、可回答的问题类型，不要包含引号、项目符号、‘本文’等措辞。\n\n"
+        f"{kind}内容：\n"
+        f"{safe_content}\n\n"
+        "请输出单段文字，不要额外解释。"
+    )
+    summary = llm_summary(prompt, fallback)
+    summary = " ".join(summary.replace("\n", " ").split())
+    if len(summary) > max_len:
+        summary = summary[:max_len]
+    if len(summary) < min_len:
+        summary = fallback
+    return summary
 
 
 def hash_text(text: str) -> str:
@@ -98,7 +138,7 @@ def build_index(root: Path, index_path: Path, personal: str, lang: str, min_len:
             except Exception:
                 raw = ""
             snippet = raw[:2000]
-            summary = summarize_text(snippet, min_len, max_len)
+            summary = summarize_with_llm(snippet, lang, min_len, max_len, kind="文件")
             hashed = hash_text(raw)
             node = {
                 "id": rel,
@@ -126,9 +166,16 @@ def build_index(root: Path, index_path: Path, personal: str, lang: str, min_len:
         children = [n for n in nodes.values() if n.get("parent") == rel]
         node["children"] = [c["rel_path"] for c in children]
         if not node.get("summary"):
-            titles = [c.get("title", c.get("rel_path")) for c in children[:6]]
-            joined = "；".join(titles)
-            node["summary"] = summarize_text(joined or "目录", min_len, max_len)
+            child_lines = []
+            for child in children[:8]:
+                title = child.get("title", child.get("rel_path", ""))
+                child_summary = child.get("summary", "")
+                if child_summary:
+                    child_lines.append(f"- {title}: {child_summary}")
+                else:
+                    child_lines.append(f"- {title}")
+            joined = "\n".join(child_lines) or "目录"
+            node["summary"] = summarize_with_llm(joined, lang, min_len, max_len, kind="目录")
         nodes[rel] = node
 
     with index_path.open("w", encoding="utf-8") as fp:
