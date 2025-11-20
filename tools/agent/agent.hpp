@@ -826,10 +826,36 @@ inline std::optional<std::pair<std::string, std::filesystem::path>> load_latest_
   return std::make_pair(sessionId, transcriptPath.lexically_normal());
 }
 
+inline size_t utf8_prefix_by_codepoint(const std::string& text, size_t maxBytes){
+  size_t i = 0;
+  while(i < text.size() && i < maxBytes){
+    unsigned char lead = static_cast<unsigned char>(text[i]);
+    size_t len = 1;
+    if((lead & 0x80u) == 0){
+      len = 1;
+    }else if((lead & 0xE0u) == 0xC0u){
+      len = 2;
+    }else if((lead & 0xF0u) == 0xE0u){
+      len = 3;
+    }else if((lead & 0xF8u) == 0xF0u){
+      len = 4;
+    }
+    if(i + len > maxBytes) break;
+    i += len;
+  }
+  return i;
+}
+
 inline std::string truncate_summary(const std::string& text, size_t limit){
   if(text.size() <= limit) return text;
-  if(limit <= 3) return text.substr(0, limit);
-  return text.substr(0, limit - 3) + "...";
+  if(limit == 0) return std::string();
+  if(limit <= 3){
+    size_t safe = utf8_prefix_by_codepoint(text, limit);
+    return text.substr(0, safe);
+  }
+  size_t prefixLimit = limit - 3;
+  size_t safe = utf8_prefix_by_codepoint(text, prefixLimit);
+  return text.substr(0, safe) + "...";
 }
 
 struct AgentSessionCompletionEntry {
