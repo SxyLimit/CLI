@@ -1897,23 +1897,28 @@ static EllipsisComputationResult applyTailEllipsis(const std::vector<EllipsisSeg
   if(glyphs.empty()) return result;
 
   result.applied = true;
+  int dotWidth = std::min(1, maxWidth);
+  int remainingWidth = maxWidth - dotWidth;
+  if(remainingWidth < 0) remainingWidth = 0;
+
   std::vector<int> keptIndices;
   keptIndices.reserve(glyphs.size());
   int keptWidth = 0;
-  for(int idx = static_cast<int>(glyphs.size()) - 1; idx >= 0; --idx){
-    keptIndices.push_back(idx);
-    keptWidth += glyphs[static_cast<size_t>(idx)].glyph.width;
-    if(keptWidth >= maxWidth) break;
+  for(size_t idx = 0; idx < glyphs.size(); ++idx){
+    int w = glyphs[idx].glyph.width;
+    if(w <= 0) w = 1;
+    if(keptWidth + w <= remainingWidth){
+      keptIndices.push_back(static_cast<int>(idx));
+      keptWidth += w;
+    }else{
+      break;
+    }
   }
-  std::reverse(keptIndices.begin(), keptIndices.end());
-  while(keptWidth > maxWidth && !keptIndices.empty()){
-    int frontIdx = keptIndices.front();
-    keptWidth -= glyphs[static_cast<size_t>(frontIdx)].glyph.width;
-    keptIndices.erase(keptIndices.begin());
-  }
-  if(keptIndices.empty()){
-    keptIndices.push_back(static_cast<int>(glyphs.size()) - 1);
-    keptWidth = glyphs.back().glyph.width;
+
+  if(keptIndices.empty() && !glyphs.empty()){
+    keptIndices.push_back(0);
+    keptWidth = glyphs[0].glyph.width;
+    dotWidth = std::max(0, maxWidth - keptWidth);
   }
 
   for(int idx : keptIndices){
@@ -1926,8 +1931,7 @@ static EllipsisComputationResult applyTailEllipsis(const std::vector<EllipsisSeg
   }
 
   result.keptWidth = keptWidth;
-  result.dotWidth = maxWidth - keptWidth;
-  if(result.dotWidth < 0) result.dotWidth = 0;
+  result.dotWidth = dotWidth;
   return result;
 }
 
@@ -2959,11 +2963,6 @@ static std::string renderHighlightedLabelWithTailEllipsis(const std::string& lab
   }
 
   std::string out;
-  if(result.dotWidth > 0){
-    out += ansi::GRAY;
-    out += std::string(static_cast<size_t>(result.dotWidth), '.');
-    out += ansi::RESET;
-  }
 
   if(!segments.empty()){
     size_t first = result.firstGlyphIndex[0];
@@ -2996,6 +2995,12 @@ static std::string renderHighlightedLabelWithTailEllipsis(const std::string& lab
       out += trimmed;
       out += ansi::RESET;
     }
+  }
+
+  if(result.dotWidth > 0){
+    out += ansi::GRAY;
+    out += std::string(static_cast<size_t>(result.dotWidth), '.');
+    out += ansi::RESET;
   }
 
   return out;
