@@ -37,6 +37,7 @@ inline bool ensure_memory_paths(const MemoryConfig& cfg, std::string& message){
   std::error_code ec;
   std::filesystem::create_directories(cfg.root, ec);
   std::filesystem::create_directories(std::filesystem::path(cfg.root) / cfg.personalSubdir, ec);
+  std::filesystem::create_directories(std::filesystem::path(cfg.root) / "knowledge", ec);
   return true;
 }
 
@@ -57,7 +58,9 @@ inline bool is_supported_memory_file(const std::filesystem::path& p){
   return ext == ".md" || ext == ".txt";
 }
 
-inline size_t copy_memory_file(const std::filesystem::path& src, const std::filesystem::path& dst, const std::string& mode){
+inline size_t copy_memory_file(const std::filesystem::path& src,
+                              const std::filesystem::path& dst,
+                              const std::string& mode){
   std::error_code ec;
   std::filesystem::create_directories(dst.parent_path(), ec);
   if(mode == "link"){
@@ -71,21 +74,28 @@ inline size_t copy_memory_file(const std::filesystem::path& src, const std::file
 
 inline size_t import_from_source(const std::filesystem::path& src,
                                  const std::filesystem::path& destRoot,
-                                 const std::string& mode){
+                                 const std::string& mode,
+                                 size_t& sanitizedCount){
   size_t count = 0;
   if(std::filesystem::is_regular_file(src)){
     if(!is_supported_memory_file(src)) return 0;
-    count += copy_memory_file(src, destRoot / src.filename(), mode);
+    std::string sanitizedName = sanitize_memory_filename(src.filename().string());
+    if(sanitizedName != src.filename().string()) ++sanitizedCount;
+    count += copy_memory_file(src, destRoot / sanitizedName, mode);
     return count;
   }
   if(std::filesystem::is_directory(src)){
-    auto base = src.filename();
+    auto base = sanitize_memory_component(src.filename().string());
+    if(base != src.filename().string()) ++sanitizedCount;
     std::filesystem::path prefix = destRoot;
     if(destRoot.filename() != base) prefix /= base;
     for(auto& entry : std::filesystem::recursive_directory_iterator(src)){
       if(entry.is_regular_file() && is_supported_memory_file(entry.path())){
         auto rel = std::filesystem::relative(entry.path(), src);
-        count += copy_memory_file(entry.path(), prefix / rel, mode);
+        auto sanitizedRel = sanitize_memory_relative(rel);
+        if(sanitizedRel != rel) ++sanitizedCount;
+        std::filesystem::path dst = prefix / sanitizedRel;
+        count += copy_memory_file(entry.path(), dst, mode);
       }
     }
   }
@@ -109,6 +119,7 @@ inline ToolExecutionResult handle_memory_import(const std::vector<std::string>& 
   bool personal = false;
   std::string mode = "copy";
   std::string langOverride;
+  size_t sanitizedCount = 0;
   for(size_t i = 2; i < args.size(); ++i){
     const std::string& tok = args[i];
     if(tok == "--category" && i + 1 < args.size()){
@@ -135,11 +146,16 @@ inline ToolExecutionResult handle_memory_import(const std::vector<std::string>& 
   ensure_memory_paths(effective, srcPath);
   std::filesystem::path src(srcPath);
   if(category.empty()) category = default_category_for(src);
+  category = sanitize_memory_component(category);
+  if(category.empty()) category = "misc";
   std::filesystem::path destRoot = std::filesystem::path(effective.root) / (personal ? effective.personalSubdir : "knowledge") / category;
-  size_t count = import_from_source(src, destRoot, mode);
+  size_t count = import_from_source(src, destRoot, mode, sanitizedCount);
   auto res = rebuild_memory_index(effective, effective.summaryLang);
   std::ostringstream oss;
   oss << "Imported " << count << " files into " << destRoot << "\n";
+  if(sanitizedCount > 0){
+    oss << "Sanitized " << sanitizedCount << " path component(s) to ASCII-safe names.\n";
+  }
   oss << res.output;
   return detail::text_result(oss.str(), res.exitCode);
 }
@@ -286,6 +302,7 @@ inline ToolExecutionResult handle_memory_note(const std::vector<std::string>& ar
   filename += now.substr(11, 8);
   std::replace(filename.begin(), filename.end(), ':', '-');
   filename += ".md";
+  filename = sanitize_memory_filename(filename);
   std::filesystem::path dir = std::filesystem::path(cfg.root) / cfg.personalSubdir / "notes";
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);

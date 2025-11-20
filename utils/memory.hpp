@@ -13,6 +13,52 @@
 #include <sstream>
 #include <unordered_set>
 
+inline bool is_valid_memory_char(char c){
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+}
+
+inline std::string sanitize_memory_component(const std::string& in){
+  std::string out;
+  char last = 0;
+  for(unsigned char uc : in){
+    char c = static_cast<char>(uc);
+    if(is_valid_memory_char(c)){
+      out.push_back(c);
+      last = c;
+    }else if(last != '-' && last != '_'){
+      out.push_back('-');
+      last = '-';
+    }
+  }
+  while(out.size() > 1 && (out.front() == '-' || out.front() == '_')) out.erase(out.begin());
+  while(out.size() > 1 && (out.back() == '-' || out.back() == '_')) out.pop_back();
+  if(out.empty()) out = "untitled";
+  return out;
+}
+
+inline std::string sanitize_memory_filename(const std::string& name){
+  std::filesystem::path p(name);
+  std::string ext = p.extension().string();
+  std::string stem = sanitize_memory_component(p.stem().string());
+  if(ext.empty() && name == p.filename().string()) return stem;
+  return stem + ext;
+}
+
+inline std::filesystem::path sanitize_memory_relative(const std::filesystem::path& rel){
+  std::filesystem::path out;
+  for(const auto& part : rel){
+    if(part == "." || part == "..") continue;
+    std::string candidate = part.string();
+    std::string ext = part.extension().string();
+    if(!ext.empty()){
+      out /= sanitize_memory_component(part.stem().string()) + ext;
+    }else{
+      out /= sanitize_memory_component(candidate);
+    }
+  }
+  return out;
+}
+
 struct MemoryNode {
   std::string id;
   std::string kind;
@@ -44,6 +90,7 @@ inline MemoryConfig memory_config_from_settings(){
   if(cfg.root.empty()) cfg.root = config_home() + "/memory";
   if(cfg.indexFile.empty()) cfg.indexFile = cfg.root + "/memory_index.jsonl";
   if(cfg.personalSubdir.empty()) cfg.personalSubdir = "personal";
+  cfg.personalSubdir = sanitize_memory_component(cfg.personalSubdir);
   if(cfg.summaryLang.empty()) cfg.summaryLang = g_settings.language;
   if(cfg.summaryMinLen <= 0) cfg.summaryMinLen = 50;
   if(cfg.summaryMaxLen <= 0) cfg.summaryMaxLen = 100;

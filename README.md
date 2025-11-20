@@ -128,10 +128,10 @@ HOME_PATH=settings
 
 ## Memory 命令使用说明
 
-`memory` 命令围绕 `${home.path}/memory` 目录工作，默认包含固定的 `personal/` 子目录以存放个人档案、偏好与对话记录，也可在同级创建 `knowledge/` 等其他分类。
+`memory` 命令围绕 `${home.path}/memory` 目录工作，默认包含固定的 `personal/` 子目录以存放个人档案、偏好与对话记录，也会为常规知识自动维护 `knowledge/` 根目录。所有由工具创建的目录/文件名会自动清洗为仅包含英文字母、数字、`-`、`_` 的安全格式，避免因 UTF-8 特殊字符导致解析异常。
 
-- `memory init`：初始化记忆目录与索引文件，自动确保 `personal/` 存在。
-- `memory import <src>`：将 `.md/.txt` 文件或目录导入到 `personal/` 或 `knowledge/<category>/` 下，导入后会调用 `tools/memory_build_index.py` 重建摘要索引。
+- `memory init`：初始化记忆目录与索引文件，自动确保 `personal/` 与 `knowledge/` 存在。
+- `memory import <src>`：将 `.md/.txt` 文件或目录导入到 `personal/` 或 `knowledge/<category>/` 下，导入后会调用 `tools/memory_build_index.py` 重建摘要索引，并对导入路径逐段做安全命名处理。
 - `memory list [path]`：按目录层级浏览记忆摘要，默认展示根目录下的一级分类和直接文件。
 - `memory show <path>`：查看单个节点的元数据和摘要，可通过 `--content` 读取正文。
 - `memory search <keywords...>`：在摘要或正文中进行关键词检索，支持 `--scope personal|knowledge`。
