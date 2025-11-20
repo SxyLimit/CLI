@@ -2170,22 +2170,25 @@ static WrappedRenderResult renderSegmentsWithWrapping(const std::vector<Ellipsis
     return ansi::WHITE;
   };
 
-  int caretWidth = 0;
-  for(size_t segIdx = 0; segIdx < glyphsBySegment.size(); ++segIdx){
-    size_t limitGlyph = 0;
-    if(segIdx < cursorSegmentIndex){
-      limitGlyph = glyphsBySegment[segIdx].size();
-    }else if(segIdx == cursorSegmentIndex){
-      limitGlyph = std::min(cursorGlyphIndex, glyphsBySegment[segIdx].size());
-    }
-    for(size_t gi = 0; gi < limitGlyph; ++gi){
-      caretWidth += std::max(1, glyphsBySegment[segIdx][gi].width);
-    }
-  }
-
   int currentWidth = 0;
   int currentLine = 0;
+  int cursorLine = 0;
+  int cursorCol = baseIndent + 1;
+  bool cursorPlaced = false;
   const char* activeColor = nullptr;
+
+  auto placeCursor = [&](int line, int col){
+    if(cursorPlaced) return;
+    cursorLine = line;
+    cursorCol = col;
+    cursorPlaced = true;
+  };
+  auto maybePlaceCursorAt = [&](size_t segIdx, size_t glyphIdx){
+    if(cursorPlaced) return;
+    if(segIdx == cursorSegmentIndex && glyphIdx == cursorGlyphIndex){
+      placeCursor(currentLine, baseIndent + currentWidth + 1);
+    }
+  };
   auto flushColor = [&](const char* next){
     if(activeColor == next) return;
     if(activeColor) std::cout << ansi::RESET;
@@ -2204,22 +2207,28 @@ static WrappedRenderResult renderSegmentsWithWrapping(const std::vector<Ellipsis
     const auto& glyphs = glyphsBySegment[segIdx];
     if(glyphs.empty()) continue;
     const char* segColor = colorForSegment(segIdx);
-    for(const auto& g : glyphs){
+    for(size_t gi = 0; gi < glyphs.size(); ++gi){
+      const auto& g = glyphs[gi];
       int w = std::max(1, g.width);
       if(currentWidth + w > limit){
         newLine();
       }
+      maybePlaceCursorAt(segIdx, gi);
       flushColor(segColor);
       std::cout << g.bytes;
       currentWidth += w;
     }
+    maybePlaceCursorAt(segIdx, glyphs.size());
   }
   flushColor(nullptr);
 
+  if(!cursorPlaced){
+    placeCursor(currentLine, baseIndent + currentWidth + 1);
+  }
+
   result.totalLines = currentLine + 1;
-  result.cursorLine = caretWidth / limit;
-  int cursorInLine = caretWidth % limit;
-  result.cursorColumn = baseIndent + cursorInLine + 1;
+  result.cursorLine = cursorLine;
+  result.cursorColumn = cursorCol;
   return result;
 }
 
