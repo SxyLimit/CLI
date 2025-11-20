@@ -7,6 +7,7 @@
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <unordered_map>
 #include <thread>
 #ifndef _WIN32
 #include <sys/select.h>
@@ -72,50 +73,81 @@ struct MemoryImportOutcome {
   size_t splitOutputs = 0;
 };
 
-inline std::vector<std::string> chunk_memory_content(const std::string& content, size_t softLimit){
-  std::vector<std::string> segments;
+struct ChunkPiece {
+  std::filesystem::path relPath;
+  std::string content;
+};
+
+inline std::string unique_slug(const std::string& base, std::unordered_map<std::string, size_t>& counter){
+  auto it = counter.find(base);
+  if(it == counter.end()){
+    counter[base] = 1;
+    return base;
+  }
+  size_t idx = ++counter[base];
+  std::ostringstream oss;
+  oss << base << "-" << idx;
+  return oss.str();
+}
+
+inline std::vector<ChunkPiece> chunk_memory_content(const std::string& content, const std::string& baseSlug, size_t softLimit){
+  // Build a hierarchy based on Markdown headings so the resulting files reflect section meaning.
+  std::vector<ChunkPiece> pieces;
   std::stringstream ss(content);
   std::string line;
-  std::string current;
-  auto flush_current = [&](){
-    if(current.empty()) return;
-    segments.push_back(current);
-    current.clear();
-  };
-  while(std::getline(ss, line)){
-    if(line.size() >= 1 && line[0] == '#'){
-      flush_current();
-    }
-    current += line;
-    current.push_back('\n');
-  }
-  flush_current();
-  if(segments.empty()) segments.push_back(content);
+  std::string buffer;
+  std::vector<std::string> stack; // parents derived from heading levels
+  std::string currentSlug = "overview";
+  std::unordered_map<std::string, size_t> slugCounter;
 
-  std::vector<std::string> chunks;
-  for(const auto& seg : segments){
-    if(seg.size() <= softLimit){
-      chunks.push_back(seg);
+  auto flush_buffer = [&](){
+    if(buffer.empty()) return;
+    std::filesystem::path rel;
+    for(const auto& part : stack) rel /= part;
+    rel /= currentSlug;
+    rel.replace_extension(".md");
+    pieces.push_back({rel, buffer});
+    buffer.clear();
+  };
+
+  while(std::getline(ss, line)){
+    if(!line.empty() && line[0] == '#'){
+      // Found a heading; close current section and start a new nested one.
+      flush_buffer();
+      size_t level = 0;
+      while(level < line.size() && line[level] == '#') ++level;
+      std::string title = line.substr(level);
+      while(!title.empty() && title.front() == ' ') title.erase(title.begin());
+      std::string slug = sanitize_memory_component(title);
+      if(slug.empty()) slug = "section";
+      slug = unique_slug(slug, slugCounter);
+      // Maintain stack depth: level 1 heading sits directly under base.
+      if(level == 0) level = 1;
+      while(stack.size() > level - 1) stack.pop_back();
+      while(stack.size() < level - 1) stack.push_back("section-" + std::to_string(stack.size() + 1));
+      currentSlug = slug;
+      buffer += line;
+      buffer.push_back('\n');
       continue;
     }
-    std::stringstream ps(seg);
-    std::string para;
-    std::string builder;
-    auto flush_builder = [&](){
-      if(builder.empty()) return;
-      chunks.push_back(builder);
-      builder.clear();
-    };
-    while(std::getline(ps, para, '\n')){
-      if(builder.size() + para.size() + 1 > softLimit && !builder.empty()){
-        flush_builder();
-      }
-      builder += para;
-      builder.push_back('\n');
+    buffer += line;
+    buffer.push_back('\n');
+    if(buffer.size() >= softLimit * 2){
+      flush_buffer();
+      currentSlug = unique_slug(currentSlug, slugCounter);
     }
-    flush_builder();
   }
-  return chunks;
+  flush_buffer();
+
+  if(pieces.empty()){
+    pieces.push_back({std::filesystem::path("overview.md"), content});
+  }
+
+  // Prefix each piece with the base slug so they live under a folder representing the source file.
+  for(auto& piece : pieces){
+    piece.relPath = std::filesystem::path(baseSlug) / piece.relPath;
+  }
+  return pieces;
 }
 
 inline size_t write_memory_chunk(const std::filesystem::path& src,
@@ -148,25 +180,21 @@ inline size_t import_single_file(const std::filesystem::path& src,
   }catch(const std::exception&){
     return 0;
   }
-  auto chunks = chunk_memory_content(raw, 2000);
+  std::string baseSlug = sanitize_memory_component(dst.stem().string());
+  if(baseSlug.empty()) baseSlug = "document";
+  auto chunks = chunk_memory_content(raw, baseSlug, 4000);
   bool singleChunk = chunks.size() == 1;
-  std::filesystem::path base = dst;
-  std::string ext = base.extension().string();
-  std::string stem = base.stem().string();
-  size_t index = 1;
+  std::filesystem::path baseDir = dst.parent_path();
   size_t chunkCount = chunks.size();
-  for(const auto& c : chunks){
+  for(const auto& piece : chunks){
     std::filesystem::path finalDst;
     if(singleChunk){
-      finalDst = base;
+      finalDst = dst;
     }else{
-      std::ostringstream name;
-      name << stem << "-p" << index << ext;
-      finalDst = base.parent_path() / name.str();
+      finalDst = baseDir / piece.relPath;
     }
-    write_memory_chunk(src, finalDst, singleChunk ? mode : "copy", c, singleChunk && mode == "link");
+    write_memory_chunk(src, finalDst, singleChunk ? mode : "copy", piece.content, singleChunk && mode == "link");
     ++outcome.filesWritten;
-    ++index;
   }
   if(!singleChunk && chunkCount > 1){
     outcome.splitOutputs += (chunkCount - 1);
@@ -266,12 +294,12 @@ inline ToolExecutionResult handle_memory_import(const std::vector<std::string>& 
     finishDetail << "import complete: " << src << " -> " << destRoot << " files=" << outcome.filesWritten << " sanitized=" << outcome.sanitizedComponents << " split=" << outcome.splitOutputs << " exit=" << res.exitCode;
     memory_append_event(effective, "import_complete", finishDetail.str());
     std::ostringstream oss;
-    oss << ansi::YELLOW << "[I]" << ansi::RESET << " imported " << outcome.filesWritten << " file chunk(s) into " << destRoot << "\n";
+    oss << ansi::YELLOW << "[I]" << ansi::RESET << " imported " << outcome.filesWritten << " section file(s) into " << destRoot << "\n";
     if(outcome.sanitizedComponents > 0){
       oss << "Sanitized " << outcome.sanitizedComponents << " path component(s) to ASCII-safe names.\n";
     }
     if(outcome.splitOutputs > 0){
-      oss << "Split source files into " << outcome.filesWritten << " chunks (" << outcome.splitOutputs << " extra pieces) to keep consistent granularity.\n";
+      oss << "Split source files into " << outcome.filesWritten << " hierarchical section files (" << outcome.splitOutputs << " extra pieces) to keep consistent granularity.\n";
     }
     oss << res.output;
     oss << ansi::RED << "[I]" << ansi::RESET << " import finished.\n";

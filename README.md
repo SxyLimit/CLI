@@ -132,7 +132,7 @@ HOME_PATH=settings
 
 导入命令的源路径补全会限制为 `.md`、`.txt` 文件或目录，并保持 ASCII 安全的命名规则。
 
-- `memory import <src>`：将 `.md/.txt` 文件或目录导入到 `personal/` 或 `knowledge/<category>/` 下，导入会以异步方式执行，提示符前显示黄色 `[I]`（进行中）与红色 `[I]`（完成），同时自动重建摘要索引、对路径逐段做安全命名，并把长文档按标题/段落切成多份以统一颗粒度。
+- `memory import <src>`：将 `.md/.txt` 文件或目录导入到 `personal/` 或 `knowledge/<category>/` 下，导入会以异步方式执行，提示符前显示黄色 `[I]`（进行中）与红色 `[I]`（完成），自动重建摘要索引、对路径逐段做安全命名，并将长文档按标题构建层级文件夹（文件名来自各级标题而非 `-pX` 后缀），在同一文件树内生成含义清晰的分节文件以统一颗粒度。
 - `memory list [path]`：按目录层级浏览记忆摘要，默认展示根目录下的一级分类和直接文件。
 - `memory show <path>`：查看单个节点的元数据和摘要，可通过 `--content` 读取正文。
 - `memory search <keywords...>`：在摘要或正文中进行关键词检索，支持 `--scope personal|knowledge`。
