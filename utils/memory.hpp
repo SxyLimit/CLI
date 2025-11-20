@@ -328,6 +328,10 @@ inline std::filesystem::path memory_event_log_path(const MemoryConfig& cfg){
   return std::filesystem::path(cfg.root) / "memory_events.jsonl";
 }
 
+inline std::filesystem::path memory_llm_log_path(const MemoryConfig& cfg){
+  return std::filesystem::path(cfg.root) / "memory_llm_calls.jsonl";
+}
+
 inline void memory_append_event(const MemoryConfig& cfg, const std::string& kind, const std::string& detail){
   std::error_code ec;
   std::filesystem::create_directories(cfg.root, ec);

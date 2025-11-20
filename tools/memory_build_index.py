@@ -27,22 +27,37 @@ def summarize_text(text: str, min_len: int, max_len: int) -> str:
     return cleaned
 
 
-def llm_summary(prompt: str, fallback: str, *, temperature: float = 0.4) -> str:
+def log_llm_call(log_path: Path, system_prompt: str, user_prompt: str, response: str, source: str) -> None:
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "source": source,
+            "system": system_prompt,
+            "user": user_prompt,
+            "response": response,
+        }
+        with log_path.open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def llm_summary(prompt: str, fallback: str, *, temperature: float = 0.4, log_path: Path) -> str:
+    system_prompt = "你是一名严谨的记忆摘要助手，需要按照用户的格式要求输出精简摘要。"
     messages = [
-        {
-            "role": "system",
-            "content": "你是一名严谨的记忆摘要助手，需要按照用户的格式要求输出精简摘要。",
-        },
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
     ]
     reply = call_openai(messages, temperature=temperature, fallback=fallback)
     text = reply.strip()
+    log_llm_call(log_path, system_prompt, prompt, text, source="memory_index")
     if text.startswith("[stub]") or text.startswith("[error]"):
         return fallback
     return text
 
 
-def summarize_with_llm(content: str, lang: str, min_len: int, max_len: int, *, kind: str) -> str:
+def summarize_with_llm(content: str, lang: str, min_len: int, max_len: int, *, kind: str, log_path: Path) -> str:
     if not content.strip():
         return summarize_text(content, min_len, max_len)
     safe_content = content[:8000]
@@ -56,7 +71,7 @@ def summarize_with_llm(content: str, lang: str, min_len: int, max_len: int, *, k
         f"{safe_content}\n\n"
         "请输出单段文字，不要额外解释。"
     )
-    summary = llm_summary(prompt, fallback)
+    summary = llm_summary(prompt, fallback, log_path=log_path)
     summary = " ".join(summary.replace("\n", " ").split())
     if len(summary) > max_len:
         summary = summary[:max_len]
@@ -83,7 +98,7 @@ def eager_expose_for(path_parts: List[str], is_file: bool) -> bool:
     return False
 
 
-def build_index(root: Path, index_path: Path, personal: str, lang: str, min_len: int, max_len: int) -> None:
+def build_index(root: Path, index_path: Path, personal: str, lang: str, min_len: int, max_len: int, log_path: Path) -> None:
     nodes: Dict[str, Dict] = {}
 
     def add_node(node: Dict) -> None:
@@ -138,7 +153,7 @@ def build_index(root: Path, index_path: Path, personal: str, lang: str, min_len:
             except Exception:
                 raw = ""
             snippet = raw[:2000]
-            summary = summarize_with_llm(snippet, lang, min_len, max_len, kind="文件")
+            summary = summarize_with_llm(snippet, lang, min_len, max_len, kind="文件", log_path=log_path)
             hashed = hash_text(raw)
             node = {
                 "id": rel,
@@ -175,7 +190,7 @@ def build_index(root: Path, index_path: Path, personal: str, lang: str, min_len:
                 else:
                     child_lines.append(f"- {title}")
             joined = "\n".join(child_lines) or "目录"
-            node["summary"] = summarize_with_llm(joined, lang, min_len, max_len, kind="目录")
+            node["summary"] = summarize_with_llm(joined, lang, min_len, max_len, kind="目录", log_path=log_path)
         nodes[rel] = node
 
     with index_path.open("w", encoding="utf-8") as fp:
@@ -192,13 +207,15 @@ def main() -> int:
     parser.add_argument("--lang", default="", help="Summary language (unused stub)")
     parser.add_argument("--min-len", type=int, default=50)
     parser.add_argument("--max-len", type=int, default=100)
+    parser.add_argument("--llm-log", default="", help="Path to log raw LLM prompts and responses")
     args = parser.parse_args()
 
     root = Path(args.root).expanduser().resolve()
     index_path = Path(args.index).expanduser().resolve()
     if not root.exists():
         root.mkdir(parents=True, exist_ok=True)
-    build_index(root, index_path, args.personal, args.lang or "en", args.min_len, args.max_len)
+    llm_log_path = Path(args.llm_log).expanduser().resolve() if args.llm_log else root / "memory_llm_calls.jsonl"
+    build_index(root, index_path, args.personal, args.lang or "en", args.min_len, args.max_len, llm_log_path)
     print(f"index written to {index_path}")
     return 0
 

@@ -138,7 +138,7 @@ HOME_PATH=settings
 - `memory search <keywords...>`：在摘要或正文中进行关键词检索，支持 `--scope personal|knowledge`。
 - `memory note <text>`：在 `personal/notes/` 下快速追加一条个人 note 并刷新摘要索引。
 - `memory query <question>`：仅基于记忆内容生成回答，执行期间提示符前会显示黄色 `[Q]`，结束后变为红色。
-- `memory monitor`：实时查看异步导入与其他记忆事件的 JSONL 日志，按 `q` 退出监控。
+- `memory monitor`：实时查看异步导入与其他记忆事件的 JSONL 日志（含模型摘要的 system/user prompt 与返回文本），按 `q` 退出监控。所有 Memory 相关的 LLM 调用也会写入 `${memory.root}/memory_llm_calls.jsonl` 便于排查。
 
 ## LLM 命令使用说明
 

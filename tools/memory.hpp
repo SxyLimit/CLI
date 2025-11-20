@@ -30,7 +30,8 @@ inline ToolExecutionResult rebuild_memory_index(const MemoryConfig& cfg, const s
       << " --index " << shellEscape(cfg.indexFile)
       << " --personal " << shellEscape(cfg.personalSubdir)
       << " --min-len " << cfg.summaryMinLen
-      << " --max-len " << cfg.summaryMaxLen;
+      << " --max-len " << cfg.summaryMaxLen
+      << " --llm-log " << shellEscape(memory_llm_log_path(cfg).string());
   if(!langOverride.empty()){
     cmd << " --lang " << shellEscape(langOverride);
   }
@@ -520,17 +521,66 @@ inline std::string summarize_memory_event(const std::string& line){
   }
 }
 
+inline std::string summarize_memory_llm_entry(const std::string& line){
+  try{
+    sj::Parser parser(line);
+    sj::Value val = parser.parse();
+    if(!val.isObject()) return line;
+    const auto& obj = val.asObject();
+    std::string ts, system, user, response, source;
+    auto collapse = [](const std::string& text){
+      std::string out;
+      out.reserve(text.size());
+      for(char ch : text){
+        out.push_back((ch == '\n' || ch == '\r') ? ' ' : ch);
+      }
+      return out;
+    };
+    if(auto it = obj.find("ts"); it != obj.end() && it->second.isString()) ts = it->second.asString();
+    if(auto it = obj.find("system"); it != obj.end() && it->second.isString()) system = it->second.asString();
+    if(auto it = obj.find("user"); it != obj.end() && it->second.isString()) user = it->second.asString();
+    if(auto it = obj.find("response"); it != obj.end() && it->second.isString()) response = it->second.asString();
+    if(auto it = obj.find("source"); it != obj.end() && it->second.isString()) source = it->second.asString();
+    std::ostringstream oss;
+    if(!ts.empty()) oss << "[" << ts << "] ";
+    oss << "LLM";
+    if(!source.empty()) oss << "(" << source << ")";
+    oss << " user: " << (user.empty() ? "<empty>" : collapse(user));
+    if(!response.empty()) oss << " | response: " << collapse(response);
+    else oss << " | response: <empty>";
+    if(!system.empty()) oss << " | system: " << collapse(system);
+    return oss.str();
+  }catch(...){
+    return line;
+  }
+}
+
 inline ToolExecutionResult handle_memory_monitor(const MemoryConfig& cfg){
 #ifndef _WIN32
   auto logPath = memory_event_log_path(cfg);
+  auto llmPath = memory_llm_log_path(cfg);
   std::ifstream stream(logPath);
-  if(!stream.good()){
+  std::ifstream llmStream(llmPath);
+  if(!stream.good() && !llmStream.good()){
     g_parse_error_cmd = "memory";
-    return detail::text_result(std::string("memory monitor: event log missing at ") + logPath.string() + "\n", 1);
+    return detail::text_result(std::string("memory monitor: event log missing at ") + logPath.string() + " and LLM log missing at " + llmPath.string() + "\n", 1);
   }
-  std::cout << "[memory] monitoring events from " << logPath << " (press q to quit)" << std::endl;
+  bool hasEvents = stream.good();
+  bool hasLlm = llmStream.good();
+  std::cout << "[memory] monitoring events";
+  if(hasEvents) std::cout << " from " << logPath; else std::cout << " (event log missing)";
+  if(hasLlm) std::cout << " and LLM calls from " << llmPath;
+  std::cout << " (press q to quit)" << std::endl;
   std::string line;
   bool running = true;
+  auto pump_stream = [](std::ifstream& streamRef, auto formatter){
+    std::string innerLine;
+    while(std::getline(streamRef, innerLine)){
+      if(innerLine.empty()) continue;
+      std::cout << "[memory] " << formatter(innerLine) << std::endl;
+    }
+    if(streamRef.eof()) streamRef.clear();
+  };
   while(running){
     fd_set readfds;
     FD_ZERO(&readfds);
@@ -546,13 +596,8 @@ inline ToolExecutionResult handle_memory_monitor(const MemoryConfig& cfg){
         }
       }
     }
-    while(std::getline(stream, line)){
-      if(line.empty()) continue;
-      std::cout << "[memory] " << summarize_memory_event(line) << std::endl;
-    }
-    if(stream.eof()){
-      stream.clear();
-    }
+    if(stream.good()) pump_stream(stream, summarize_memory_event);
+    if(llmStream.good()) pump_stream(llmStream, summarize_memory_llm_entry);
   }
   return detail::text_result("memory monitor stopped\n");
 #else
