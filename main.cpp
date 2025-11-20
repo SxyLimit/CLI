@@ -2895,6 +2895,86 @@ static void printInlineSuggestionSegment(const EllipsisSegment& seg,
   flush(0);
 }
 
+static std::string renderCandidateLineWithTailEllipsis(const std::string& label,
+                                                       const std::vector<int>& matches,
+                                                       const std::string& annotation,
+                                                       int maxWidth){
+  if(maxWidth <= 0){
+    std::string line = renderHighlightedLabel(label, matches);
+    if(!annotation.empty()){
+      line += " ";
+      line += ansi::GREEN;
+      line += annotation;
+      line += ansi::RESET;
+    }
+    return line;
+  }
+
+  std::vector<EllipsisSegment> segments;
+  segments.push_back(EllipsisSegment{EllipsisSegmentRole::InlineSuggestion, label, matches});
+  if(!annotation.empty()){
+    segments.push_back(EllipsisSegment{EllipsisSegmentRole::Annotation, " " + annotation, {}});
+  }
+
+  auto view = applyTailEllipsis(segments, maxWidth);
+
+  std::string out;
+  if(view.applied && view.dotWidth > 0){
+    out += ansi::GRAY;
+    out += std::string(static_cast<size_t>(view.dotWidth), '.');
+    out += ansi::RESET;
+  }
+
+  for(size_t i = 0; i < segments.size(); ++i){
+    const auto& seg = segments[i];
+    const std::string& trimmed = view.trimmedTexts[i];
+    if(trimmed.empty()) continue;
+
+    if(seg.role == EllipsisSegmentRole::InlineSuggestion){
+      auto glyphs = utf8Glyphs(seg.text);
+      auto matched = glyphMatchesFor(glyphs, seg.matches);
+      size_t start = view.firstGlyphIndex[i];
+      int count = view.trimmedGlyphCounts[i];
+      if(start == std::numeric_limits<size_t>::max() || count <= 0){
+        out += ansi::WHITE;
+        out += trimmed;
+        out += ansi::RESET;
+        continue;
+      }
+
+      int state = 0;
+      auto flush = [&](int next){
+        if(state == next) return;
+        if(state != 0) out += ansi::RESET;
+        if(next == 1) out += ansi::WHITE;
+        else if(next == 2) out += ansi::GRAY;
+        state = next;
+      };
+
+      for(int j = 0; j < count && start + static_cast<size_t>(j) < glyphs.size(); ++j){
+        size_t gi = start + static_cast<size_t>(j);
+        bool isMatch = (gi < matched.size() && matched[gi]);
+        flush(isMatch ? 1 : 2);
+        out += glyphs[gi].bytes;
+      }
+      flush(0);
+    }else if(seg.role == EllipsisSegmentRole::Annotation){
+      std::string toRender = trimmed;
+      if(!toRender.empty() && toRender[0] == ' '){
+        out.push_back(' ');
+        toRender.erase(toRender.begin());
+      }
+      if(!toRender.empty()){
+        out += ansi::GREEN;
+        out += toRender;
+        out += ansi::RESET;
+      }
+    }
+  }
+
+  return out;
+}
+
 static void renderBelowThree(const std::string& status, int status_len,
                              int cursorCol,
                              int indent,
@@ -2908,14 +2988,8 @@ static void renderBelowThree(const std::string& status, int status_len,
     size_t idx = static_cast<size_t>((sel + i) % total);
     const std::string& label = cand.labels[idx];
     const std::vector<int>& matches = cand.matchPositions[idx];
-    std::string line = renderHighlightedLabelWithTailEllipsis(label, matches, tailLimit);
     std::string annotation = (idx < cand.annotations.size()) ? cand.annotations[idx] : "";
-    if(!annotation.empty()){
-      line += " ";
-      line += ansi::GREEN;
-      line += annotation;
-      line += ansi::RESET;
-    }
+    std::string line = renderCandidateLineWithTailEllipsis(label, matches, annotation, tailLimit);
     std::cout << "\n" << "\x1b[2K";
     for(int s = 0; s < indent; ++s) std::cout << ' ';
     std::cout << line;
@@ -3353,6 +3427,10 @@ int main(){
 
       int suggestionIndent = baseIndent + widthBeforeAnchor;
       int tailLimit = rightLimit;
+      if(tailLimit > 0){
+        tailLimit -= widthBeforeAnchor;
+        if(tailLimit < 1) tailLimit = 1;
+      }
 
       renderBelowThree(status, status_len, caretCol, suggestionIndent, cand, sel, lastShown, tailLimit);
     }else{
