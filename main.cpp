@@ -3440,13 +3440,63 @@ int main(){
 
       renderBelowThree(status, status_len, caretCol, suggestionIndent, cand, sel, lastShown, tailLimit);
     }else{
-      int wrapWidth = g_settings.promptInputEllipsisRightWidth;
-      if(wrapWidth <= 0) wrapWidth = rightLimit;
-      if(wrapWidth <= 0) wrapWidth = 80;
-      auto wrapped = renderSegmentsWrapped(wrapWidth);
-      promptLines = std::get<0>(wrapped);
-      caretRow = std::get<1>(wrapped);
-      caretCol = std::get<2>(wrapped);
+      if(ellipsisEnabled){
+        auto view = applyWindowEllipsis(segments, EllipsisCursorLocation{cursorSegmentIndex, cursorGlyphIndex},
+                                        leftLimit, rightLimit);
+
+        int printedLeftDots = 0;
+        if(view.leftApplied && view.leftDotWidth > 0){
+          printedLeftDots = view.leftDotWidth;
+          std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedLeftDots), '.') << ansi::RESET;
+        }
+
+        for(size_t i = 0; i < segments.size(); ++i){
+          const std::string& trimmed = view.trimmedTexts[i];
+          if(trimmed.empty()) continue;
+          const auto& seg = segments[i];
+          switch(seg.role){
+            case EllipsisSegmentRole::Buffer:{
+              bool isErrorWord = pathError && i == pathErrorSegmentIndex;
+              std::cout << (isErrorWord ? ansi::RED : ansi::WHITE) << trimmed << ansi::RESET;
+              break;
+            }
+            case EllipsisSegmentRole::InlineSuggestion:{
+              printInlineSuggestionSegment(seg, view, i);
+              break;
+            }
+            case EllipsisSegmentRole::Annotation:
+              std::cout << ansi::GREEN << trimmed << ansi::RESET;
+              break;
+            case EllipsisSegmentRole::PathErrorDetail:
+              std::cout << ansi::YELLOW << trimmed << ansi::RESET;
+              break;
+            case EllipsisSegmentRole::Ghost:
+              std::cout << ansi::GRAY << trimmed << ansi::RESET;
+              break;
+          }
+        }
+
+        int printedRightDots = 0;
+        if(view.rightApplied && view.rightDotWidth > 0){
+          printedRightDots = view.rightDotWidth;
+          std::cout << ansi::GRAY << std::string(static_cast<size_t>(printedRightDots), '.') << ansi::RESET;
+        }
+
+        std::cout.flush();
+
+        int caretWidth = printedLeftDots + view.leftKeptWidth;
+        caretCol = baseIndent + caretWidth + 1;
+        caretRow = 0;
+        promptLines = 1;
+      }else{
+        int wrapWidth = g_settings.promptInputEllipsisRightWidth;
+        if(wrapWidth <= 0) wrapWidth = rightLimit;
+        if(wrapWidth <= 0) wrapWidth = 80;
+        auto wrapped = renderSegmentsWrapped(wrapWidth);
+        promptLines = std::get<0>(wrapped);
+        caretRow = std::get<1>(wrapped);
+        caretCol = std::get<2>(wrapped);
+      }
     }
 
     if(!haveCand){
