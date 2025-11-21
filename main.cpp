@@ -3565,9 +3565,11 @@ int main(){
     int currentTerminalWidth = terminalDisplayWidth();
     if(currentTerminalWidth != lastTerminalWidth){
       lastTerminalWidth = currentTerminalWidth;
-      if(g_settings.promptInputEllipsisEnabled && g_settings.promptInputEllipsisRightWidthAuto){
-        needRender = true;
-      }
+      // Terminal width changes can invalidate previous layouts (wrapping and
+      // ellipsis windows) even when the ellipsis window is not in auto mode.
+      // Always trigger a redraw so the prompt and input realign to the new
+      // available width.
+      needRender = true;
     }
 
     if(agent_indicator_tick_blink()){
