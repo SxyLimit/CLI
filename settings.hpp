@@ -190,8 +190,10 @@ inline std::vector<std::string> settings_value_suggestions_for(const std::string
         out.assign(langs.begin(), langs.end());
       }else if(key=="prompt.name"){
         // no predefined suggestions
-      }else if(key=="prompt.input_ellipsis.left_width" || key=="prompt.input_ellipsis.right_width"){
+      }else if(key=="prompt.input_ellipsis.left_width"){
         out = {"20", "30", "50", "60"};
+      }else if(key=="prompt.input_ellipsis.right_width"){
+        out = {"default", "20", "30", "50", "60"};
       }else if(key=="history.recent_limit"){
         out = {"5", "10", "20", "50"};
       }else if(key=="memory.summary.min_len" || key=="memory.summary.max_len"){
@@ -284,10 +286,19 @@ inline void load_settings(const std::string& path){
         }catch(...){
         }
       }else if(key=="prompt.input_ellipsis.right_width"){
-        try{
-          int v = std::stoi(val);
-          if(v >= 0) g_settings.promptInputEllipsisRightWidth = v;
-        }catch(...){
+        std::string lowered = val;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), ::tolower);
+        if(lowered == "default"){
+          g_settings.promptInputEllipsisRightWidthAuto = true;
+        }else{
+          try{
+            int v = std::stoi(val);
+            if(v >= 0){
+              g_settings.promptInputEllipsisRightWidthAuto = false;
+              g_settings.promptInputEllipsisRightWidth = v;
+            }
+          }catch(...){
+          }
         }
       }else if(key=="agent.fs_tools.expose"){
         bool b; if(parseBool(val, b)) g_settings.agentExposeFsTools = b;
@@ -369,7 +380,11 @@ inline void save_settings(const std::string& path){
   out << "prompt.theme=" << g_settings.promptTheme << "\n";
   out << "prompt.input_ellipsis.enabled=" << (g_settings.promptInputEllipsisEnabled ? "true" : "false") << "\n";
   out << "prompt.input_ellipsis.left_width=" << g_settings.promptInputEllipsisLeftWidth << "\n";
-  out << "prompt.input_ellipsis.right_width=" << g_settings.promptInputEllipsisRightWidth << "\n";
+  if(g_settings.promptInputEllipsisRightWidthAuto){
+    out << "prompt.input_ellipsis.right_width=default\n";
+  }else{
+    out << "prompt.input_ellipsis.right_width=" << g_settings.promptInputEllipsisRightWidth << "\n";
+  }
   out << "history.recent_limit=" << g_settings.historyRecentLimit << "\n";
   out << "agent.fs_tools.expose=" << (g_settings.agentExposeFsTools ? "true" : "false") << "\n";
   auto pathForTheme = [&](const std::string& theme) -> std::string {
@@ -431,7 +446,11 @@ inline bool settings_get_value(const std::string& key, std::string& value){
     return true;
   }
   if(key=="prompt.input_ellipsis.right_width"){
-    value = std::to_string(g_settings.promptInputEllipsisRightWidth);
+    if(g_settings.promptInputEllipsisRightWidthAuto){
+      value = "default";
+    }else{
+      value = std::to_string(g_settings.promptInputEllipsisRightWidth);
+    }
     return true;
   }
   if(key=="history.recent_limit"){
@@ -579,6 +598,15 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     return true;
   }
   if(key=="prompt.input_ellipsis.left_width" || key=="prompt.input_ellipsis.right_width"){
+    if(key=="prompt.input_ellipsis.right_width"){
+      std::string lowered = value;
+      std::transform(lowered.begin(), lowered.end(), lowered.begin(), ::tolower);
+      if(lowered == "default"){
+        g_settings.promptInputEllipsisRightWidthAuto = true;
+        g_settings.promptInputEllipsisRightWidth = 0;
+        return true;
+      }
+    }
     int v = 0;
     try{
       size_t idx = 0;
@@ -595,6 +623,7 @@ inline bool settings_set_value(const std::string& key, const std::string& value,
     if(key=="prompt.input_ellipsis.left_width"){
       g_settings.promptInputEllipsisLeftWidth = v;
     }else{
+      g_settings.promptInputEllipsisRightWidthAuto = false;
       g_settings.promptInputEllipsisRightWidth = v;
     }
     return true;
