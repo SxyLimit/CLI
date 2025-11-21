@@ -3585,6 +3585,9 @@ int main(){
     int observedWidth = platform::terminal_width();
     if(observedWidth > 0 && observedWidth != lastTerminalWidth){
       lastTerminalWidth = observedWidth;
+      lastPromptLines = 1;
+      lastCursorRow = 0;
+      lastShown = 0;
       needRender = true;
     }
     if(agent_indicator_tick_blink()){
