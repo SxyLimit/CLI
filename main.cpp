@@ -3299,6 +3299,12 @@ int main(){
     renderPromptLabel();
 
     int baseIndent = status_len + promptDisplayWidth();
+    int labelWrapLines = 0;
+    int labelIndentWidth = baseIndent;
+    if(terminalWidth > 0){
+      labelWrapLines = baseIndent / terminalWidth;
+      labelIndentWidth = baseIndent % terminalWidth;
+    }
     int rightLimit = ellipsisEnabled ? effectiveInputRightWidth(baseIndent, terminalWidth) : -1;
 
     std::vector<EllipsisSegment> segments;
@@ -3370,18 +3376,18 @@ int main(){
       segments.push_back(EllipsisSegment{EllipsisSegmentRole::Ghost, contextGhost, {}});
     }
 
-    auto renderSegmentsWrapped = [&](int wrapWidth)->std::tuple<int, int, int>{
+    auto renderSegmentsWrapped = [&](int wrapWidth, int startLineOffset, int startWidth)->std::tuple<int, int, int>{
       int maxWidth = (wrapWidth > 0) ? wrapWidth : std::numeric_limits<int>::max();
-      int currentWidth = 0;
-      int lineCount = 1;
+      int currentWidth = startWidth;
+      int lineCount = std::max(1, startLineOffset + 1);
       int caretRow = 0;
-      int caretCol = baseIndent + 1;
-      std::string indent(baseIndent, ' ');
+      int caretCol = startWidth + 1;
+      std::string indent(startWidth, ' ');
 
       auto placeCursorIfNeeded = [&](size_t segIdx, size_t glyphIdx){
         if(segIdx == cursorSegmentIndex && glyphIdx == cursorGlyphIndex){
           caretRow = lineCount - 1;
-          caretCol = baseIndent + currentWidth + 1;
+          caretCol = currentWidth + 1;
         }
       };
 
@@ -3390,7 +3396,7 @@ int main(){
       auto newlineWithIndent = [&](){
         std::cout << "\n" << "\x1b[2K";
         if(!indent.empty()) std::cout << indent;
-        currentWidth = 0;
+        currentWidth = static_cast<int>(indent.size());
         lineCount += 1;
       };
 
@@ -3433,9 +3439,9 @@ int main(){
       return {lineCount, caretRow, caretCol};
     };
 
-    int promptLines = 1;
-    int caretRow = 0;
-    int caretCol = baseIndent + 1;
+    int promptLines = labelWrapLines + 1;
+    int caretRow = labelWrapLines;
+    int caretCol = labelIndentWidth + 1;
     if(haveCand){
       auto view = applyWindowEllipsis(segments, EllipsisCursorLocation{cursorSegmentIndex, cursorGlyphIndex},
                                       leftLimit, rightLimit);
@@ -3489,9 +3495,9 @@ int main(){
       std::cout.flush();
 
       int caretWidth = printedLeftDots + view.leftKeptWidth;
-      caretCol = baseIndent + caretWidth + 1;
-      caretRow = 0;
-      promptLines = 1;
+      caretCol = labelIndentWidth + caretWidth + 1;
+      caretRow = labelWrapLines;
+      promptLines = labelWrapLines + 1;
 
       int suggestionIndent = baseIndent + widthBeforeAnchor;
       int tailLimit = rightLimit;
@@ -3547,16 +3553,16 @@ int main(){
         std::cout.flush();
 
         int caretWidth = printedLeftDots + view.leftKeptWidth;
-        caretCol = baseIndent + caretWidth + 1;
-        caretRow = 0;
-        promptLines = 1;
+        caretCol = labelIndentWidth + caretWidth + 1;
+        caretRow = labelWrapLines;
+        promptLines = labelWrapLines + 1;
       }else{
         int wrapWidth = g_settings.promptInputEllipsisRightWidth;
         if(wrapWidth < 0){
           wrapWidth = effectiveInputRightWidth(baseIndent, terminalWidth);
         }
         if(wrapWidth <= 0) wrapWidth = 80;
-        auto wrapped = renderSegmentsWrapped(wrapWidth);
+        auto wrapped = renderSegmentsWrapped(wrapWidth, labelWrapLines, labelIndentWidth);
         promptLines = std::get<0>(wrapped);
         caretRow = std::get<1>(wrapped);
         caretCol = std::get<2>(wrapped);
