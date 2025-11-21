@@ -276,7 +276,7 @@ struct AppSettings {
   std::map<std::string, std::string> promptThemeArtPaths;
   bool promptInputEllipsisEnabled = false;
   int  promptInputEllipsisLeftWidth = 30;
-  int  promptInputEllipsisRightWidth = 50;
+  int  promptInputEllipsisRightWidth = -1;
   int  historyRecentLimit = 10;
   std::string configHome;
   bool agentExposeFsTools = false;

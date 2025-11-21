@@ -6,6 +6,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
@@ -118,6 +119,22 @@ inline void flush_stdout(){
   _commit(_fileno(stdout));
 }
 
+inline int terminal_width(){
+  CONSOLE_SCREEN_BUFFER_INFO info{};
+  if(GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info)){
+    return static_cast<int>(info.srWindow.Right - info.srWindow.Left + 1);
+  }
+  const char* envCols = std::getenv("COLUMNS");
+  if(envCols){
+    try{
+      int v = std::stoi(envCols);
+      if(v > 0) return v;
+    }catch(...){
+    }
+  }
+  return 0;
+}
+
 inline bool env_var_exists(const std::string& key){
   DWORD length = GetEnvironmentVariableA(key.c_str(), nullptr, 0);
   if(length == 0){
@@ -177,6 +194,22 @@ inline void write_stdout(const char* data, size_t len){
 
 inline void flush_stdout(){
   ::fsync(STDOUT_FILENO);
+}
+
+inline int terminal_width(){
+  struct winsize ws{};
+  if(::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0){
+    if(ws.ws_col > 0) return static_cast<int>(ws.ws_col);
+  }
+  const char* envCols = ::getenv("COLUMNS");
+  if(envCols){
+    try{
+      int v = std::stoi(envCols);
+      if(v > 0) return v;
+    }catch(...){
+    }
+  }
+  return 0;
 }
 
 inline bool env_var_exists(const std::string& key){
@@ -2142,6 +2175,24 @@ static int promptDisplayWidth(){
   return displayWidth(indicators.plain + plainPromptText());
 }
 
+static int terminalWidthOrFallback(int preferred){
+  if(preferred > 0) return preferred;
+  int width = platform::terminal_width();
+  if(width > 0) return width;
+  return 80;
+}
+
+static int effectiveInputRightWidth(int baseIndent, int preferredTerminalWidth){
+  int configured = g_settings.promptInputEllipsisRightWidth;
+  if(configured < 0){
+    int termWidth = terminalWidthOrFallback(preferredTerminalWidth);
+    int usable = termWidth - baseIndent;
+    if(usable < 1) usable = 1;
+    return usable;
+  }
+  return configured;
+}
+
 // helper: 是否“路径型占位符”
 static bool isPathLikePlaceholder(const std::string& ph){
   std::string t = ph; std::transform(t.begin(), t.end(), t.begin(), ::tolower);
@@ -2787,7 +2838,9 @@ static void renderInputWithGhost(const std::string& status, int status_len,
   (void)status_len;
   bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled;
   int leftLimit = ellipsisEnabled ? g_settings.promptInputEllipsisLeftWidth : -1;
-  int rightLimit = ellipsisEnabled ? g_settings.promptInputEllipsisRightWidth : -1;
+  int baseIndent = status_len + promptDisplayWidth();
+  int terminalWidth = terminalWidthOrFallback(0);
+  int rightLimit = ellipsisEnabled ? effectiveInputRightWidth(baseIndent, terminalWidth) : -1;
 
   std::cout << ansi::CLR
             << ansi::WHITE << status << ansi::RESET;
@@ -3186,6 +3239,8 @@ int main(){
   bool needRender = true;
   int lastPromptLines = 1;
   int lastCursorRow = 0;
+  int lastTerminalWidth = platform::terminal_width();
+  if(lastTerminalWidth <= 0) lastTerminalWidth = 80;
 
   auto renderFrame = [&](){
     std::string status = REG.renderStatusPrefix();
@@ -3229,15 +3284,22 @@ int main(){
 
     std::string annotation = (sel < cand.annotations.size()) ? cand.annotations[sel] : "";
 
+    int terminalWidth = lastTerminalWidth;
+    int measuredWidth = platform::terminal_width();
+    if(measuredWidth > 0){
+      terminalWidth = measuredWidth;
+      lastTerminalWidth = measuredWidth;
+    }
+
     bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled;
     int leftLimit = ellipsisEnabled ? g_settings.promptInputEllipsisLeftWidth : -1;
-    int rightLimit = ellipsisEnabled ? g_settings.promptInputEllipsisRightWidth : -1;
 
     std::cout << ansi::CLR
               << ansi::WHITE << status << ansi::RESET;
     renderPromptLabel();
 
     int baseIndent = status_len + promptDisplayWidth();
+    int rightLimit = ellipsisEnabled ? effectiveInputRightWidth(baseIndent, terminalWidth) : -1;
 
     std::vector<EllipsisSegment> segments;
     segments.push_back(EllipsisSegment{EllipsisSegmentRole::Buffer, wordInfo.beforeWord, {}});
@@ -3490,7 +3552,9 @@ int main(){
         promptLines = 1;
       }else{
         int wrapWidth = g_settings.promptInputEllipsisRightWidth;
-        if(wrapWidth <= 0) wrapWidth = rightLimit;
+        if(wrapWidth < 0){
+          wrapWidth = effectiveInputRightWidth(baseIndent, terminalWidth);
+        }
         if(wrapWidth <= 0) wrapWidth = 80;
         auto wrapped = renderSegmentsWrapped(wrapWidth);
         promptLines = std::get<0>(wrapped);
@@ -3518,6 +3582,11 @@ int main(){
   };
 
   while(true){
+    int observedWidth = platform::terminal_width();
+    if(observedWidth > 0 && observedWidth != lastTerminalWidth){
+      lastTerminalWidth = observedWidth;
+      needRender = true;
+    }
     if(agent_indicator_tick_blink()){
       needRender = true;
     }
