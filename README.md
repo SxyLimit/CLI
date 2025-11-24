@@ -93,7 +93,7 @@ HOME_PATH=settings
 | `prompt.theme_art_path.<theme>` | `.climg` 文件路径 | 空 | 为指定主题配置结构化彩色图案；`prompt.theme_art_path` 仍保留为 `prompt.theme_art_path.blue-purple` 的别名。 |
 | `prompt.input_ellipsis.enabled` | `true` / `false` | `false` | 是否在输入过长时启用“省略号视窗”。 |
 | `prompt.input_ellipsis.left_width` | 非负整数 | `30` | 视窗左侧最多保留的列数，仅在启用省略号时生效。 |
-| `prompt.input_ellipsis.right_width` | 非负整数 | `50` | 整体视窗的最大宽度，仅在启用省略号时生效。 |
+| `prompt.input_ellipsis.right_width` | 非负整数或 `default` | `default`（实时取终端宽度减去状态栏与提示符宽度） | 整体视窗的最大宽度，仅在启用省略号时生效。 |
 | `history.recent_limit` | 非负整数 | `10` | 历史记录最多保留的条目数。 |
 | `agent.fs_tools.expose` | `true` / `false` | `false` | 是否在 CLI 中暴露 `fs.read` / `fs.write` / `fs.create` / `fs.tree` 命令及其补全。 |
 | `memory.enabled` | `true` / `false` | `true` | 是否启用 Memory 系统。 |
@@ -120,7 +120,7 @@ HOME_PATH=settings
 - `setting set prompt.name <名称>`：调整提示符名称，留空则恢复默认的 `mycli`。
 - `setting set prompt.theme <blue|blue-purple|red-yellow|purple-orange>`：在纯蓝与多种渐变主题之间切换。
 - `setting set prompt.input_ellipsis.enabled <true|false>`：开启后，当输入或自动补全内容超过指定长度时，会围绕光标保留左右两侧的可视窗口，并用 `.` 填充被截断的区域，避免光标被推到屏幕之外。
-- `setting set prompt.input_ellipsis.left_width <列宽>` / `setting set prompt.input_ellipsis.right_width <列宽>`：分别配置光标左侧可保留的最大宽度与整体可视窗口的最大显示宽度（单位为等宽字符数），默认值分别为 `30` 与 `50`，必须为非负整数。
+- `setting set prompt.input_ellipsis.left_width <列宽>` / `setting set prompt.input_ellipsis.right_width <列宽|default>`：分别配置光标左侧可保留的最大宽度与整体可视窗口的最大显示宽度（单位为等宽字符数）。左侧默认 `30`，右侧默认跟随终端宽度减去提示符/状态栏占用列数，可通过 `default` 关键字恢复自适应模式，或填入非负整数锁定固定宽度。
 - `setting set history.recent_limit <数量>`：调整历史指令最多保留的条目数（默认 10，设为 0 可禁用历史记录）。
 - `setting set agent.fs_tools.expose <true|false>`：是否在 CLI 中暴露 `fs.read` / `fs.write` / `fs.create` / `fs.tree` 命令。默认 `false`（仅 Agent 调用），设为 `true` 后可手动运行并恢复补全/帮助。
 - `setting set prompt.theme_art_path.<theme> <path>`：为指定主题配置图片结构化文本路径（例如 `prompt.theme_art_path.red-yellow`），仅接受 `.climg` 文件并在补全时只展示目录与 `.climg` 文件；搭配 `tools/image_to_art.py` 生成即可在 `show MyCLI` 中显示彩色图片（旧版本的 `prompt.theme_art_path` 仍作为 `prompt.theme_art_path.blue-purple` 的别名保留）。

@@ -6,6 +6,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
@@ -132,6 +133,14 @@ inline void set_env(const std::string& key, const std::string& value, bool overw
   _putenv_s(key.c_str(), value.c_str());
 }
 
+inline int terminal_columns(){
+  CONSOLE_SCREEN_BUFFER_INFO info{};
+  if(GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info)){
+    return static_cast<int>(info.srWindow.Right - info.srWindow.Left + 1);
+  }
+  return 80;
+}
+
 #else
 
 class TermRaw {
@@ -185,6 +194,19 @@ inline bool env_var_exists(const std::string& key){
 
 inline void set_env(const std::string& key, const std::string& value, bool overwrite){
   ::setenv(key.c_str(), value.c_str(), overwrite ? 1 : 0);
+}
+
+inline int terminal_columns(){
+  struct winsize ws{};
+  if(::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0){
+    return static_cast<int>(ws.ws_col);
+  }
+  const char* cols = ::getenv("COLUMNS");
+  if(cols){
+    int v = std::atoi(cols);
+    if(v > 0) return v;
+  }
+  return 80;
 }
 
 #endif
@@ -2142,6 +2164,26 @@ static int promptDisplayWidth(){
   return displayWidth(indicators.plain + plainPromptText());
 }
 
+static int terminalDisplayWidth(){
+  int width = platform::terminal_columns();
+  return width > 0 ? width : 80;
+}
+
+static int defaultEllipsisRightWidth(int statusWidth){
+  int prefixWidth = statusWidth + promptDisplayWidth();
+  int available = terminalDisplayWidth() - prefixWidth;
+  if(available < 1) available = 1;
+  return available;
+}
+
+static int effectiveEllipsisRightWidth(int statusWidth){
+  if(!g_settings.promptInputEllipsisEnabled) return -1;
+  if(g_settings.promptInputEllipsisRightWidthAuto){
+    return defaultEllipsisRightWidth(statusWidth);
+  }
+  return g_settings.promptInputEllipsisRightWidth;
+}
+
 // helper: 是否“路径型占位符”
 static bool isPathLikePlaceholder(const std::string& ph){
   std::string t = ph; std::transform(t.begin(), t.end(), t.begin(), ::tolower);
@@ -2784,10 +2826,9 @@ static void renderPromptLabel(){
 
 static void renderInputWithGhost(const std::string& status, int status_len,
                                  const std::string& buf, const std::string& ghost){
-  (void)status_len;
   bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled;
   int leftLimit = ellipsisEnabled ? g_settings.promptInputEllipsisLeftWidth : -1;
-  int rightLimit = ellipsisEnabled ? g_settings.promptInputEllipsisRightWidth : -1;
+  int rightLimit = ellipsisEnabled ? effectiveEllipsisRightWidth(status_len) : -1;
 
   std::cout << ansi::CLR
             << ansi::WHITE << status << ansi::RESET;
@@ -3186,6 +3227,7 @@ int main(){
   bool needRender = true;
   int lastPromptLines = 1;
   int lastCursorRow = 0;
+  int lastTerminalWidth = terminalDisplayWidth();
 
   auto renderFrame = [&](){
     std::string status = REG.renderStatusPrefix();
@@ -3231,7 +3273,7 @@ int main(){
 
     bool ellipsisEnabled = g_settings.promptInputEllipsisEnabled;
     int leftLimit = ellipsisEnabled ? g_settings.promptInputEllipsisLeftWidth : -1;
-    int rightLimit = ellipsisEnabled ? g_settings.promptInputEllipsisRightWidth : -1;
+    int rightLimit = ellipsisEnabled ? effectiveEllipsisRightWidth(status_len) : -1;
 
     std::cout << ansi::CLR
               << ansi::WHITE << status << ansi::RESET;
@@ -3489,9 +3531,11 @@ int main(){
         caretRow = 0;
         promptLines = 1;
       }else{
-        int wrapWidth = g_settings.promptInputEllipsisRightWidth;
+        int wrapWidth = g_settings.promptInputEllipsisRightWidthAuto
+                          ? defaultEllipsisRightWidth(status_len)
+                          : g_settings.promptInputEllipsisRightWidth;
         if(wrapWidth <= 0) wrapWidth = rightLimit;
-        if(wrapWidth <= 0) wrapWidth = 80;
+        if(wrapWidth <= 0) wrapWidth = defaultEllipsisRightWidth(status_len);
         auto wrapped = renderSegmentsWrapped(wrapWidth);
         promptLines = std::get<0>(wrapped);
         caretRow = std::get<1>(wrapped);
@@ -3518,6 +3562,16 @@ int main(){
   };
 
   while(true){
+    int currentTerminalWidth = terminalDisplayWidth();
+    if(currentTerminalWidth != lastTerminalWidth){
+      lastTerminalWidth = currentTerminalWidth;
+      // Terminal width changes can invalidate previous layouts (wrapping and
+      // ellipsis windows) even when the ellipsis window is not in auto mode.
+      // Always trigger a redraw so the prompt and input realign to the new
+      // available width.
+      needRender = true;
+    }
+
     if(agent_indicator_tick_blink()){
       needRender = true;
     }
