@@ -3064,7 +3064,10 @@ static void execToolLine(const std::string& line){
   req.forLLM = false;
   ToolExecutionResult result = def->executor(req);
   std::string out = result.viewForCli();
-  if(!out.empty()) std::cout<<out;
+  if(!out.empty()){
+    if(out.back() != '\n') out.push_back('\n');
+    std::cout << out;
+  }
 }
 
 ToolExecutionResult invoke_registered_tool(const std::string& line, bool silent){
