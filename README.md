@@ -48,6 +48,7 @@ HOME_PATH=settings
 | `llm` | `llm call <消息…>`<br>`llm recall` 等 | 通过 Python 助手异步调用 Moonshot/Kimi 接口并管理历史会话。 |
 | `message` | `message list`<br>`message last`<br>`message detail <文件>` | 监听 Markdown 通知目录，列出未读文件、查看最近修改的文件，或按文件名读取具体内容。 |
 | `memory` | `memory import/list/show/search/stats/note/query/monitor …` | 导入个人/知识文档，浏览摘要、监控异步导入，或基于记忆回答问题。 |
+| `backup` | `backup [<path>] [-m <mark>]`<br>`backup recall [label]`<br>`backup delete <label> [-f]`<br>`backup clear [-f]` | 快速将文件/目录备份到配置目录的 `backups/` 目录，标签由原始名称、可选标记和时间戳组成，可在 `recall`/`delete` 中按标签补全；删除和清空需二次确认或显式 `-f`。 |
 | `cd` | `cd <路径>`<br>`cd -o [-a\|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 仅显示目录名，`-c` 恢复完整路径）。 |
 | `ls` | `ls [-a] [-l] [目录]` | 简化版目录列表，支持展示隐藏文件与长列表模式。 |
 | `cat` | `cat <path> [选项]` | 便于人工快速查看文件内容；行为与 Agent 使用的 `fs.read` 保持一致。 |
@@ -65,6 +66,13 @@ HOME_PATH=settings
 - `mycli_settings.conf` 采用逐行 `key=value` 的纯文本格式，方便手动编辑；不要误认为是 JSON 文件。
 - 运行时可通过 `setting set home.path <目录>` 修改配置目录，CLI 会自动迁移已有文件并更新监听路径。
 - 也可以在 `.env` 或系统环境变量中设置 `HOME_PATH=<目录>`，用于在启动前指定配置目录位置。
+
+## 备份命令
+
+- `backup [<path>] [-m <mark>]`：快速备份指定路径（缺省为当前目录），会在配置目录下的 `backups/` 中生成一个独立子目录，并将源文件/目录复制到其中。标签采用“名称[-标记]-时间戳（精确到秒）”的形式，便于识别。
+- `backup recall [label]`：返回对应备份实体的绝对路径；不带参数时会列出已有备份（展示标签与路径），`label` 支持直接按前述标签补全。
+- `backup delete <label> [-f]`：删除某条备份记录及其文件。交互模式下会进行二次确认；非交互或需要静默删除时请附加 `-f`。
+- `backup clear [-f]`：清空所有备份与索引，默认要求确认，或使用 `-f` 跳过确认。
 
 ## 设置命令
 
