@@ -24,14 +24,11 @@ struct Backup {
     spec.summary = "Create and manage quick backups";
     set_tool_summary_locale(spec, "en", "Create and manage quick backups");
     set_tool_summary_locale(spec, "zh", "快速创建和管理备份");
-    spec.help = "backup [<path>] [-m <mark>] | backup recall [label] | backup delete <label> [-f] | backup clear [-f]";
+    spec.help = "backup save [<path>] [-m <mark>] | backup recall [label] | backup delete <label> [-f] | backup clear [-f]";
     set_tool_help_locale(spec, "en", spec.help);
-    set_tool_help_locale(spec, "zh", "backup [<路径>] [-m <备注>] | backup recall [label] | backup delete <label> [-f] | backup clear [-f]");
-    spec.options = {
-      OptionSpec{"-m", true, {}, nullptr, false, "<mark>"}
-    };
-    spec.positional = {positional("[<path>]", true, PathKind::Any, {}, true)};
+    set_tool_help_locale(spec, "zh", "backup save [<路径>] [-m <备注>] | backup recall [label] | backup delete <label> [-f] | backup clear [-f]");
     spec.subs = {
+      SubcommandSpec{"save", {OptionSpec{"-m", true, {}, nullptr, false, "<mark>"}}, {positional("[<path>]", true, PathKind::Any, {}, true)}, {}, nullptr},
       SubcommandSpec{"recall", {}, {positional("[<label>]")}, {}, nullptr},
       SubcommandSpec{"delete", {OptionSpec{"-f", false}}, {positional("<label>")}, {}, nullptr},
       SubcommandSpec{"clear", {OptionSpec{"-f", false}}, {}, {}, nullptr}
@@ -42,11 +39,12 @@ struct Backup {
   static ToolExecutionResult run(const ToolExecutionRequest& request){
     const auto& tokens = request.tokens;
     if(tokens.size() >= 2){
+      if(tokens[1] == "save") return handleSave(request, 2);
       if(tokens[1] == "recall") return handleRecall(request);
       if(tokens[1] == "delete") return handleDelete(request);
       if(tokens[1] == "clear") return handleClear(request);
     }
-    return handleCreate(request);
+    return handleSave(request, 1);
   }
 
   static Candidates complete(const std::string& buffer, const std::vector<std::string>& tokens){
@@ -69,7 +67,7 @@ struct Backup {
     };
 
     if(tokens.size() == 1){
-      std::vector<std::string> subs = {"recall", "delete", "clear"};
+      std::vector<std::string> subs = {"save", "recall", "delete", "clear"};
       for(const auto& s : subs){
         MatchResult m = compute_match(s, sw.word);
         if(!m.matched) continue;
@@ -84,7 +82,7 @@ struct Backup {
     }
 
     if(tokens.size() == 2 && !trailingSpace){
-      std::vector<std::string> subs = {"recall", "delete", "clear"};
+      std::vector<std::string> subs = {"save", "recall", "delete", "clear"};
       for(const auto& s : subs){
         MatchResult m = compute_match(s, sw.word);
         if(!m.matched) continue;
@@ -112,7 +110,7 @@ struct Backup {
 
 private:
   static std::filesystem::path backupRoot(){
-    return std::filesystem::path(config_home()) / "backups";
+    return std::filesystem::path(config_home()) / ".backup";
   }
 
   static std::filesystem::path indexPath(){
@@ -239,17 +237,17 @@ private:
     return line == "y" || line == "yes";
   }
 
-  static ToolExecutionResult handleCreate(const ToolExecutionRequest& request){
+  static ToolExecutionResult handleSave(const ToolExecutionRequest& request, size_t startIndex){
     const auto& tokens = request.tokens;
     std::string mark;
     std::optional<std::string> targetArg;
-    for(size_t i = 1; i < tokens.size(); ++i){
+    for(size_t i = startIndex; i < tokens.size(); ++i){
       if(tokens[i] == "-m"){ if(i + 1 >= tokens.size()) { g_parse_error_cmd = "backup"; return detail::text_result("backup: -m requires a value\n", 1);} mark = tokens[++i]; }
       else if(!tokens[i].empty() && tokens[i][0] == '-'){
         g_parse_error_cmd = "backup"; return detail::text_result("unknown option: " + tokens[i] + "\n", 1);
       }else{
         if(!targetArg) targetArg = tokens[i];
-        else { g_parse_error_cmd = "backup"; return detail::text_result("usage: backup [<path>] [-m <mark>]\n", 1); }
+        else { g_parse_error_cmd = "backup"; return detail::text_result("usage: backup save [<path>] [-m <mark>]\n", 1); }
       }
     }
 
@@ -275,22 +273,20 @@ private:
     if(!cleanMark.empty()) label += "-" + cleanMark;
     label += "-" + ts;
 
-    std::filesystem::path destDir = backupRoot() / (label + "-" + id);
-    std::filesystem::create_directories(destDir, ec);
+    std::filesystem::path dest = backupRoot() / (cleanBase + "-" + ts);
+    std::filesystem::create_directories(dest.parent_path(), ec);
     if(ec){
       return detail::text_result("backup: failed to create backup folder\n", 1);
     }
 
-    std::filesystem::path target = destDir / cleanBase;
     if(std::filesystem::is_directory(source)){
-      std::filesystem::create_directories(target, ec);
+      std::filesystem::create_directories(dest, ec);
       if(ec){
         return detail::text_result("backup: failed to prepare directory\n", 1);
       }
-      std::filesystem::copy(source, target, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+      std::filesystem::copy(source, dest, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
     }else{
-      std::filesystem::create_directories(target.parent_path(), ec);
-      std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, ec);
+      std::filesystem::copy_file(source, dest, std::filesystem::copy_options::overwrite_existing, ec);
     }
     if(ec){
       return detail::text_result("backup: failed to copy source\n", 1);
@@ -299,7 +295,7 @@ private:
     BackupEntry entry;
     entry.id = id;
     entry.label = label;
-    entry.backupPath = std::filesystem::absolute(target).string();
+    entry.backupPath = std::filesystem::absolute(dest).string();
     entry.sourcePath = source.string();
     entry.timestamp = ts;
     entries.push_back(entry);
