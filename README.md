@@ -52,6 +52,8 @@ HOME_PATH=settings
 | `ls` | `ls [-a] [-l] [目录]` | 简化版目录列表，支持展示隐藏文件与长列表模式。 |
 | `cat` | `cat <path> [选项]` | 便于人工快速查看文件内容；行为与 Agent 使用的 `fs.read` 保持一致。 |
 | `mv` | `mv <source> <target>` | 移动或重命名文件/目录。 |
+| `touch` | `touch <path> [更多路径]` | 同 Linux `touch`，不存在则创建文件，存在时更新修改时间（可作用于目录）。 |
+| `mkdir` | `mkdir [--parents|-p] <path> [更多路径]` | 同 Linux `mkdir`，创建目录，`-p` 可自动创建父目录并允许目标已存在。 |
 | `rm` | `rm [-r] <path> [更多路径]` | 删除文件，带 `-r` 可递归删除目录。 |
 | `exit` / `quit` | `exit` 或 `quit` | 结束 REPL 会话。 |
 

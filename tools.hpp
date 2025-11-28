@@ -24,6 +24,8 @@
 #include "tools/agent/fs_create.hpp"
 #include "tools/agent/fs_tree.hpp"
 #include "tools/mv.hpp"
+#include "tools/mkdir.hpp"
+#include "tools/touch.hpp"
 #include "tools/rm.hpp"
 #include "tools/p.hpp"
 #include "tools/agent/agent.hpp"
@@ -1126,6 +1128,8 @@ inline void register_all_tools(){
   REG.registerTool(tool::make_fs_tree_tool());
   REG.registerTool(tool::make_cat_tool());
   REG.registerTool(tool::make_mv_tool());
+  REG.registerTool(tool::make_mkdir_tool());
+  REG.registerTool(tool::make_touch_tool());
   REG.registerTool(tool::make_rm_tool());
   REG.registerTool(tool::make_agent_tool());
   REG.registerTool(tool::make_fs_todo_tool());
