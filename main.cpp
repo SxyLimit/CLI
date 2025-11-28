@@ -3066,7 +3066,7 @@ static void execToolLine(const std::string& line){
   std::string out = result.viewForCli();
   if(!out.empty()){
     if(out.back() != '\n') out.push_back('\n');
-    std::cout << out;
+    std::cout << out << std::flush;
   }
 }
 
