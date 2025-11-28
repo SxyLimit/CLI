@@ -96,6 +96,51 @@ struct Backup {
       return cand;
     }
 
+    auto savePathCompletion = [&](size_t startIndex) -> std::optional<Candidates> {
+      bool enteringMarkValue = false;
+      bool havePath = false;
+      bool editingPath = false;
+      for(size_t i = startIndex; i < tokens.size(); ++i){
+        const std::string& tok = tokens[i];
+        if(tok == "-m"){
+          if(i + 1 >= tokens.size()){
+            enteringMarkValue = true;
+            break;
+          }
+          if(i + 1 == tokens.size() - 1 && tokens.back() == sw.word && !trailingSpace){
+            enteringMarkValue = true;
+            break;
+          }
+          ++i; // skip mark value
+          continue;
+        }
+        if(!havePath){
+          havePath = true;
+          if(i == tokens.size() - 1 && (!trailingSpace || tok == sw.word)){
+            editingPath = true;
+          }
+        }
+      }
+      if(!havePath && !enteringMarkValue && trailingSpace){
+        editingPath = true;
+      }
+      if(editingPath){
+        return pathCandidatesForWord(buffer, sw.word, PathKind::Any, nullptr, true);
+      }
+      return std::nullopt;
+    };
+
+    if(tokens.size() >= 2 && tokens[1] == "save"){
+      if(auto paths = savePathCompletion(2)) return *paths;
+    }
+
+    if(tokens.size() >= 2){
+      const std::string& first = tokens[1];
+      if(first != "recall" && first != "delete" && first != "clear"){ // implicit save
+        if(auto paths = savePathCompletion(1)) return *paths;
+      }
+    }
+
     if(tokens.size() >= 2 && (tokens[1] == "recall" || tokens[1] == "delete")){
       addEntries(sw.word);
       return cand;
