@@ -37,6 +37,7 @@
 #include "tools/agent/fs_risk.hpp"
 #include "tools/agent/fs_admin.hpp"
 #include "tools/memory.hpp"
+#include "tools/backup.hpp"
 
 inline std::vector<std::string> render_mycli_ascii_art() {
   return {
@@ -1144,6 +1145,7 @@ inline void register_all_tools(){
   REG.registerTool(tool::make_fs_log_tool());
   REG.registerTool(tool::make_fs_report_tool());
   REG.registerTool(tool::make_memory_tool());
+  REG.registerTool(tool::make_backup_tool());
   REG.registerTool(tool::make_exit_tool("exit"));
   REG.registerTool(tool::make_exit_tool("quit"));
 }
