@@ -3228,12 +3228,9 @@ int main(){
   std::string contextGhost;
 
   int plainTabNoCandCount = 0;
-  std::string stashedLineForTab;
-  bool canRestoreStashedLine = false;
 
-  auto reset_plain_tab = [&](bool dropRestore){
+  auto reset_plain_tab = [&](){
     plainTabNoCandCount = 0;
-    if(dropRestore) canRestoreStashedLine = false;
   };
 
   bool needRender = true;
@@ -3616,7 +3613,7 @@ int main(){
     if(!platform::read_char(ch)) break;
 
     if(ch=='\n' || ch=='\r'){
-      reset_plain_tab(true);
+      reset_plain_tab();
       std::cout << "\n";
       std::string trimmedInput = trim_copy(buf);
       if(!trimmedInput.empty()){
@@ -3642,7 +3639,7 @@ int main(){
       continue;
     }
     if(ch==0x7f){
-      reset_plain_tab(true);
+      reset_plain_tab();
       if(cursorByte > 0){
         size_t prev = utf8PrevIndex(buf, cursorByte);
         buf.erase(prev, cursorByte - prev);
@@ -3654,7 +3651,7 @@ int main(){
     }
     if(ch=='\t'){
       if(haveCand && total>0){
-        reset_plain_tab(true);
+        reset_plain_tab();
         CursorWordInfo wordCtx = analyzeWordAtCursor(buf, cursorByte);
         const std::string& label = cand.labels[sel];
         auto tokensNow = splitTokens(buf);
@@ -3671,27 +3668,19 @@ int main(){
         plainTabNoCandCount += 1;
         if(plainTabNoCandCount >= 2){
           plainTabNoCandCount = 0;
-          if(canRestoreStashedLine){
-            buf = stashedLineForTab;
-            cursorByte = buf.size();
-            sel = 0;
-            needRender = true;
-            canRestoreStashedLine = false;
-          }else if(!buf.empty()){
-            stashedLineForTab = buf;
-            history_record_command(stashedLineForTab);
+          if(!buf.empty()){
+            history_record_command(buf);
             buf.clear();
             cursorByte = 0;
             sel = 0;
             needRender = true;
-            canRestoreStashedLine = true;
           }
         }
       }
       continue;
     }
     if(ch=='\x1b'){
-      reset_plain_tab(true);
+      reset_plain_tab();
       char seq[2];
       if(!platform::read_char(seq[0])) continue;
       if(!platform::read_char(seq[1])) continue;
@@ -3724,7 +3713,7 @@ int main(){
     }
 #ifdef _WIN32
     if(static_cast<unsigned char>(ch) == 0x00 || static_cast<unsigned char>(ch) == 0xE0){
-      reset_plain_tab(true);
+      reset_plain_tab();
       char code;
       if(!platform::read_char(code)) continue;
       switch(static_cast<unsigned char>(code)){
@@ -3765,7 +3754,7 @@ int main(){
     }
 #endif
     if(static_cast<unsigned char>(ch) >= 0x20){
-      reset_plain_tab(true);
+      reset_plain_tab();
       buf.insert(buf.begin() + static_cast<std::string::difference_type>(cursorByte), ch);
       cursorByte += 1;
       sel=0;
