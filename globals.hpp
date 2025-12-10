@@ -25,6 +25,7 @@ void register_raw_terminal(TermRaw* term);
 void unregister_raw_terminal(TermRaw* term);
 void suspend_raw_mode();
 void resume_raw_mode();
+int terminal_columns();
 
 class RawModeScope {
 public:
