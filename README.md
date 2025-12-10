@@ -102,7 +102,7 @@ HOME_PATH=settings
 | `prompt.name` | 字符串 | `mycli` | 提示符名称。 |
 | `prompt.theme` | `blue` / `blue-purple` / `red-yellow` / `purple-orange` | `blue` | 提示符配色主题。 |
 | `prompt.theme_art_path.<theme>` | `.climg` 文件路径 | 空 | 为指定主题配置结构化彩色图案；`prompt.theme_art_path` 仍保留为 `prompt.theme_art_path.blue-purple` 的别名。 |
-| `prompt.input_ellipsis.enabled` | `true` / `false` | `false` | 是否在输入过长时启用“省略号视窗”。 |
+| `prompt.input_ellipsis.enabled` | `true` / `false` | `true` | 是否在输入过长时启用“省略号视窗”。 |
 | `prompt.input_ellipsis.left_width` | 非负整数 | `30` | 视窗左侧最多保留的列数，仅在启用省略号时生效。 |
 | `prompt.input_ellipsis.right_width` | 非负整数或 `default` | `default`（实时取终端宽度减去状态栏与提示符宽度） | 整体视窗的最大宽度，仅在启用省略号时生效。 |
 | `history.recent_limit` | 非负整数 | `10` | 历史记录最多保留的条目数。 |
