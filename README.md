@@ -51,7 +51,7 @@ HOME_PATH=settings
 | `memory` | `memory import/list/show/search/stats/note/query/monitor …` | 导入个人/知识文档，浏览摘要、监控异步导入，或基于记忆回答问题。 |
 | `backup` | `backup save [<path>] [-m <mark>]`<br>`backup recall [label]`<br>`backup delete <label> [-f]`<br>`backup clear [-f]` | 快速将文件/目录备份到配置目录的 `.backup/` 目录，标签由原始名称、可选标记和时间戳组成，可在 `recall`/`delete` 中按标签补全；删除和清空需二次确认或显式 `-f`。 |
 | `cd` | `cd <路径>`<br>`cd -o [-a\|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 仅显示目录名，`-c` 恢复完整路径）。 |
-| `ls` | `ls [-a] [-l] [目录]` | 简化版目录列表，支持展示隐藏文件与长列表模式。 |
+| `ls` | `ls [-a] [-l] [目录]` | 按当前视窗宽度自动对齐的目录列表，支持隐藏文件与包含类型、大小、修改时间的长列表模式。 |
 | `cat` | `cat <path> [选项]` | 便于人工快速查看文件内容；行为与 Agent 使用的 `fs.read` 保持一致。 |
 | `mv` | `mv <source> <target>` | 移动或重命名文件/目录。 |
 | `touch` | `touch <path> [更多路径]` | 同 Linux `touch`，不存在则创建文件，存在时更新修改时间（可作用于目录）。 |
