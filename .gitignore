@@ -51,3 +51,6 @@ target/
 *.tmp
 *.temp
 *.bak
+
+# User-specific settings
+settings/mycli_settings.conf
