@@ -682,6 +682,7 @@ struct Setting {
     }
 
     bool editingValue = false;
+    bool hasValueToken = false;
     std::string keyForSuggestions;
     std::set<std::string> childSegmentsForBest;
     if(!best.empty()){
@@ -693,6 +694,7 @@ struct Setting {
       if(!remainder.empty()){
         if(remainder.size() > 1){
           editingValue = true;
+          hasValueToken = true;
           keyForSuggestions = join_setting_segments(best);
           if(endsWithSpace){
             pattern.clear();
@@ -712,6 +714,7 @@ struct Setting {
           }
           if(!matchesChild){
             editingValue = true;
+            hasValueToken = true;
             keyForSuggestions = join_setting_segments(best);
             if(endsWithSpace){
               pattern.clear();
@@ -728,6 +731,9 @@ struct Setting {
     }
 
     if(editingValue){
+      if(hasValueToken && endsWithSpace){
+        return cand;
+      }
       if(keyForSuggestions.empty()) return cand;
       if(const SettingKeyInfo* info = settings_key_info(keyForSuggestions)){
         if(info->isPath){
