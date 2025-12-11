@@ -2345,8 +2345,8 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
   const SubcommandSpec* sub=findSub();
 
   if(spec.name == "setting" && sub){
+    bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
     auto positionalIndex = [&]()->std::optional<size_t>{
-      bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
       size_t start = 2; // command + subcommand
       size_t count = 0;
       for(size_t i=start; i<toks.size(); ++i){
@@ -2377,6 +2377,25 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
       if(sub->name=="set" && idx==1){
         std::string keyName = (toks.size()>=3? toks[2] : "");
         auto values = settings_value_suggestions_for(keyName);
+        if(!trailingSpace && !sw.word.empty()){
+          bool ignoreCase = g_settings.completionIgnoreCase;
+          auto equalsIgnoreCase = [&](const std::string& a, const std::string& b){
+            if(a.size() != b.size()) return false;
+            for(size_t i=0; i<a.size(); ++i){
+              char ca = a[i], cb = b[i];
+              if(ignoreCase){
+                ca = static_cast<char>(std::tolower(static_cast<unsigned char>(ca)));
+                cb = static_cast<char>(std::tolower(static_cast<unsigned char>(cb)));
+              }
+              if(ca != cb) return false;
+            }
+            return true;
+          };
+          bool alreadyComplete = std::any_of(values.begin(), values.end(), [&](const std::string& v){
+            return equalsIgnoreCase(v, sw.word);
+          });
+          if(alreadyComplete) return out;
+        }
         for(const auto& val : values){
           MatchResult match = compute_match(val, sw.word);
           if(!match.matched) continue;
