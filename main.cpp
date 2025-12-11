@@ -2346,6 +2346,19 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
 
   if(spec.name == "setting" && sub){
     bool trailingSpace = (!buf.empty() && std::isspace(static_cast<unsigned char>(buf.back())));
+    bool ignoreCase = g_settings.completionIgnoreCase;
+    auto equalsIgnoreCase = [&](const std::string& a, const std::string& b){
+      if(a.size() != b.size()) return false;
+      for(size_t i=0; i<a.size(); ++i){
+        char ca = a[i], cb = b[i];
+        if(ignoreCase){
+          ca = static_cast<char>(std::tolower(static_cast<unsigned char>(ca)));
+          cb = static_cast<char>(std::tolower(static_cast<unsigned char>(cb)));
+        }
+        if(ca != cb) return false;
+      }
+      return true;
+    };
     auto positionalIndex = [&]()->std::optional<size_t>{
       size_t start = 2; // command + subcommand
       size_t count = 0;
@@ -2374,39 +2387,31 @@ static Candidates candidatesForTool(const ToolSpec& spec, const std::string& buf
         }
         if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
       }
-      if(sub->name=="set" && idx==1){
+      if(sub->name=="set"){
         std::string keyName = (toks.size()>=3? toks[2] : "");
         auto values = settings_value_suggestions_for(keyName);
-        if(!trailingSpace && !sw.word.empty()){
-          bool ignoreCase = g_settings.completionIgnoreCase;
-          auto equalsIgnoreCase = [&](const std::string& a, const std::string& b){
-            if(a.size() != b.size()) return false;
-            for(size_t i=0; i<a.size(); ++i){
-              char ca = a[i], cb = b[i];
-              if(ignoreCase){
-                ca = static_cast<char>(std::tolower(static_cast<unsigned char>(ca)));
-                cb = static_cast<char>(std::tolower(static_cast<unsigned char>(cb)));
-              }
-              if(ca != cb) return false;
-            }
-            return true;
-          };
-          bool alreadyComplete = std::any_of(values.begin(), values.end(), [&](const std::string& v){
-            return equalsIgnoreCase(v, sw.word);
+        auto valueMatches = [&](const std::string& candidate){
+          if(candidate.empty() || values.empty()) return false;
+          return std::any_of(values.begin(), values.end(), [&](const std::string& v){
+            return equalsIgnoreCase(v, candidate);
           });
-          if(alreadyComplete) return out;
+        };
+        if(valueMatches(sw.word)) return out;
+        if(toks.size() >= 4 && valueMatches(toks[3])) return out;
+
+        if(idx==1){
+          for(const auto& val : values){
+            MatchResult match = compute_match(val, sw.word);
+            if(!match.matched) continue;
+            out.items.push_back(sw.before + val);
+            out.labels.push_back(val);
+            out.matchPositions.push_back(match.positions);
+            out.annotations.push_back("");
+            out.exactMatches.push_back(match.exact);
+            out.matchDetails.push_back(match);
+          }
+          if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
         }
-        for(const auto& val : values){
-          MatchResult match = compute_match(val, sw.word);
-          if(!match.matched) continue;
-          out.items.push_back(sw.before + val);
-          out.labels.push_back(val);
-          out.matchPositions.push_back(match.positions);
-          out.annotations.push_back("");
-          out.exactMatches.push_back(match.exact);
-          out.matchDetails.push_back(match);
-        }
-        if(!out.items.empty()) return finalizeCandidates(sw.word, std::move(out));
       }
     }
   }
@@ -3669,9 +3674,17 @@ int main(){
       continue;
     }
     if(ch=='\t'){
-      if(haveCand && total>0){
+      CursorWordInfo wordCtx = analyzeWordAtCursor(buf, cursorByte);
+      std::string fullWord = wordCtx.wordBeforeCursor + wordCtx.wordAfterCursor;
+      bool hasEffectiveCand = haveCand && total>0;
+      if(hasEffectiveCand){
+        hasEffectiveCand = std::any_of(cand.labels.begin(), cand.labels.end(), [&](const std::string& label){
+          return label != fullWord;
+        });
+      }
+
+      if(hasEffectiveCand){
         reset_plain_tab();
-        CursorWordInfo wordCtx = analyzeWordAtCursor(buf, cursorByte);
         const std::string& label = cand.labels[sel];
         auto tokensNow = splitTokens(buf);
         if(!tokensNow.empty() && tokensNow[0] == "p"){
