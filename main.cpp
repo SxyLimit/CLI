@@ -690,11 +690,19 @@ static std::vector<std::pair<std::string, std::time_t>> collectMarkdownFiles(con
 }
 
 void message_set_watch_folder(const std::string& path){
-  g_message_watcher.folder = path;
+  std::string normalized = path;
+  if(!normalized.empty()){
+    std::error_code absEc;
+    auto absolutePath = std::filesystem::absolute(normalized, absEc);
+    if(!absEc){
+      normalized = absolutePath.lexically_normal().string();
+    }
+  }
+  g_message_watcher.folder = normalized;
   g_message_watcher.known.clear();
   g_message_watcher.seen.clear();
-  if(path.empty()) return;
-  auto files = collectMarkdownFiles(path);
+  if(normalized.empty()) return;
+  auto files = collectMarkdownFiles(normalized);
   for(const auto& item : files){
     g_message_watcher.known[item.first] = item.second;
     g_message_watcher.seen[item.first] = item.second;
