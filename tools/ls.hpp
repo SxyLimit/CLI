@@ -70,18 +70,30 @@ struct Ls {
     SortMode sortMode = SortMode::Name;
     std::string path = ".";
     for(size_t i = 1; i < args.size(); ++i){
-      if(args[i] == "-a") showDot = true;
-      else if(args[i] == "-l") longFmt = true;
-      else if(args[i] == "-t") sortMode = SortMode::Time;
-      else if(args[i] == "-S") sortMode = SortMode::Size;
-      else if(args[i] == "-X") sortMode = SortMode::Extension;
-      else if(args[i] == "-v") sortMode = SortMode::Version;
-      else if(args[i] == "-r") reverse = true;
-      else if(!args[i].empty() && args[i][0] == '-'){
-        g_parse_error_cmd = "ls";
-        return detail::text_result("unknown option: " + args[i] + "\n", 1);
+      const std::string& token = args[i];
+      if(token == "--"){
+        if(i + 1 < args.size()){
+          path = args[++i];
+        }
+        continue;
+      }
+      if(!token.empty() && token[0] == '-' && token.size() > 1){
+        for(size_t j = 1; j < token.size(); ++j){
+          switch(token[j]){
+            case 'a': showDot = true; break;
+            case 'l': longFmt = true; break;
+            case 't': sortMode = SortMode::Time; break;
+            case 'S': sortMode = SortMode::Size; break;
+            case 'X': sortMode = SortMode::Extension; break;
+            case 'v': sortMode = SortMode::Version; break;
+            case 'r': reverse = true; break;
+            default:
+              g_parse_error_cmd = "ls";
+              return detail::text_result("unknown option: -" + std::string(1, token[j]) + "\n", 1);
+          }
+        }
       }else{
-        path = args[i];
+        path = token;
       }
     }
     DIR* dir = ::opendir(path.c_str());
