@@ -50,7 +50,12 @@ struct Ls {
     set_tool_summary_locale(spec, "zh", "列出目录（简化版）");
     spec.options = {
       {"-a", false, {}, nullptr, false, "", false},
-      {"-l", false, {}, nullptr, false, "", false}
+      {"-l", false, {}, nullptr, false, "", false},
+      {"-t", false, {}, nullptr, false, "", false},
+      {"-S", false, {}, nullptr, false, "", false},
+      {"-X", false, {}, nullptr, false, "", false},
+      {"-v", false, {}, nullptr, false, "", false},
+      {"-r", false, {}, nullptr, false, "", false}
     };
     spec.positional = {positional("[<dir>]")};
     return spec;
@@ -60,15 +65,35 @@ struct Ls {
     const auto& args = request.tokens;
     bool showDot = false;
     bool longFmt = false;
+    bool reverse = false;
+    enum class SortMode { Name, Time, Size, Extension, Version };
+    SortMode sortMode = SortMode::Name;
     std::string path = ".";
     for(size_t i = 1; i < args.size(); ++i){
-      if(args[i] == "-a") showDot = true;
-      else if(args[i] == "-l") longFmt = true;
-      else if(!args[i].empty() && args[i][0] == '-'){
-        g_parse_error_cmd = "ls";
-        return detail::text_result("unknown option: " + args[i] + "\n", 1);
+      const std::string& token = args[i];
+      if(token == "--"){
+        if(i + 1 < args.size()){
+          path = args[++i];
+        }
+        continue;
+      }
+      if(!token.empty() && token[0] == '-' && token.size() > 1){
+        for(size_t j = 1; j < token.size(); ++j){
+          switch(token[j]){
+            case 'a': showDot = true; break;
+            case 'l': longFmt = true; break;
+            case 't': sortMode = SortMode::Time; break;
+            case 'S': sortMode = SortMode::Size; break;
+            case 'X': sortMode = SortMode::Extension; break;
+            case 'v': sortMode = SortMode::Version; break;
+            case 'r': reverse = true; break;
+            default:
+              g_parse_error_cmd = "ls";
+              return detail::text_result("unknown option: -" + std::string(1, token[j]) + "\n", 1);
+          }
+        }
       }else{
-        path = args[i];
+        path = token;
       }
     }
     DIR* dir = ::opendir(path.c_str());
@@ -102,9 +127,78 @@ struct Ls {
       entries.push_back(std::move(info));
     }
     ::closedir(dir);
-    std::sort(entries.begin(), entries.end(), [](const EntryInfo& a, const EntryInfo& b){
+
+    auto natural_compare = [](const std::string& a, const std::string& b) -> int {
+      size_t ia = 0, ib = 0;
+      while(ia < a.size() && ib < b.size()){
+        if(std::isdigit(static_cast<unsigned char>(a[ia])) &&
+           std::isdigit(static_cast<unsigned char>(b[ib]))){
+          size_t ja = ia;
+          size_t jb = ib;
+          while(ja < a.size() && std::isdigit(static_cast<unsigned char>(a[ja]))) ++ja;
+          while(jb < b.size() && std::isdigit(static_cast<unsigned char>(b[jb]))) ++jb;
+          std::string numA = a.substr(ia, ja - ia);
+          std::string numB = b.substr(ib, jb - ib);
+          auto trim_leading_zero = [](const std::string& s){
+            size_t pos = 0;
+            while(pos + 1 < s.size() && s[pos] == '0') ++pos;
+            return s.substr(pos);
+          };
+          numA = trim_leading_zero(numA);
+          numB = trim_leading_zero(numB);
+          if(numA.size() != numB.size()) return numA.size() < numB.size() ? -1 : 1;
+          int cmp = numA.compare(numB);
+          if(cmp != 0) return cmp < 0 ? -1 : 1;
+          ia = ja;
+          ib = jb;
+          continue;
+        }
+        unsigned char ca = static_cast<unsigned char>(a[ia]);
+        unsigned char cb = static_cast<unsigned char>(b[ib]);
+        if(ca != cb) return ca < cb ? -1 : 1;
+        ++ia;
+        ++ib;
+      }
+      if(ia == a.size() && ib == b.size()) return 0;
+      return ia == a.size() ? -1 : 1;
+    };
+
+    auto ext_of = [](const std::string& name){
+      std::string base = name;
+      if(!base.empty() && base.back() == '/') base.pop_back();
+      auto pos = base.find_last_of('.');
+      if(pos == std::string::npos || pos == 0) return std::string();
+      return base.substr(pos + 1);
+    };
+
+    std::sort(entries.begin(), entries.end(), [&](const EntryInfo& a, const EntryInfo& b){
+      switch(sortMode){
+        case SortMode::Time:
+          if(a.modifiedAt != b.modifiedAt) return a.modifiedAt > b.modifiedAt;
+          break;
+        case SortMode::Size:
+          if(a.size != b.size) return a.size > b.size;
+          break;
+        case SortMode::Extension: {
+          std::string ea = ext_of(a.name);
+          std::string eb = ext_of(b.name);
+          if(ea != eb) return ea < eb;
+          break;
+        }
+        case SortMode::Version: {
+          int cmp = natural_compare(a.name, b.name);
+          if(cmp != 0) return cmp < 0;
+          break;
+        }
+        case SortMode::Name:
+        default:
+          break;
+      }
       return a.displayName < b.displayName;
     });
+    if(reverse){
+      std::reverse(entries.begin(), entries.end());
+    }
 
     std::ostringstream oss;
     if(longFmt){
