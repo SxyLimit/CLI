@@ -11,6 +11,7 @@ This project now uses the redesigned tool architecture. Please follow these rule
 - `tools/tool_common.hpp` hosts the shared helpers available to all tool headers.
 - Register new built-in tools in `register_all_tools()` using the exported factory. Do **not** call `REG.registerTool` directly outside that helper.
 - When you need custom completions, attach a `ToolCompletionProvider` in the returned `ToolDefinition` (see the `setting` tool for an example).
+- Commands that expose multiple short flags must accept stacked short options (for example, `-lt` behaving like `-l -t`).
 
 ### `setting` command expectations
 - Keep the CLI grammar as `setting <get|set> …`. The first argument must always be the action keyword.
