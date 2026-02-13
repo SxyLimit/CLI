@@ -41,6 +41,7 @@ struct HistoryReplay {
     Candidates cand;
     if(tokens.empty() || tokens[0] != "p") return cand;
     bool trailingSpace = (!buffer.empty() && std::isspace(static_cast<unsigned char>(buffer.back())));
+    if(tokens.size() > 1 && trailingSpace) return cand;
     if(tokens.size() <= 1 && !trailingSpace) return cand;
 
     auto sw = splitLastWord(buffer);
@@ -68,4 +69,3 @@ inline ToolDefinition make_p_tool(){
 }
 
 } // namespace tool
-

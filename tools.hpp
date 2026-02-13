@@ -697,10 +697,9 @@ struct Setting {
           hasValueToken = true;
           keyForSuggestions = join_setting_segments(best);
           if(endsWithSpace){
-            pattern.clear();
-          }else{
-            pattern = sw.word;
+            return cand;
           }
+          pattern = sw.word;
         }else{
           const std::string& partial = remainder.back();
           bool matchesChild = false;
@@ -717,10 +716,9 @@ struct Setting {
             hasValueToken = true;
             keyForSuggestions = join_setting_segments(best);
             if(endsWithSpace){
-              pattern.clear();
-            }else{
-              pattern = sw.word;
+              return cand;
             }
+            pattern = sw.word;
           }
         }
       }else if(endsWithSpace && childSegmentsForBest.empty()){

@@ -142,6 +142,15 @@ struct Backup {
     }
 
     if(tokens.size() >= 2 && (tokens[1] == "recall" || tokens[1] == "delete")){
+      bool expectingLabel = false;
+      if(tokens.size() == 2){
+        expectingLabel = trailingSpace;
+      }else{
+        expectingLabel = !trailingSpace;
+      }
+      if(!expectingLabel){
+        return cand;
+      }
       addEntries(sw.word);
       return cand;
     }
@@ -461,4 +470,3 @@ inline ToolDefinition make_backup_tool(){
 }
 
 } // namespace tool
-

@@ -169,6 +169,15 @@ struct Llm {
       return cand;
     }
     if(tokens.size() >= 2 && tokens[1] == "switch"){
+      bool expectingConversation = false;
+      if(tokens.size() == 2){
+        expectingConversation = trailingSpace;
+      }else{
+        expectingConversation = !trailingSpace;
+      }
+      if(!expectingConversation){
+        return cand;
+      }
       std::string query = sw.word;
       if(tokens.size() == 2 && trailingSpace) query.clear();
       auto names = conversation_names();
@@ -207,4 +216,3 @@ inline ToolDefinition make_llm_tool(){
 }
 
 } // namespace tool
-

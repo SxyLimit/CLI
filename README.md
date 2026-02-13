@@ -284,6 +284,16 @@ positionalPaths=1:file,2:file:.climg
 上述配置会将第一个位置参数视为源文件，第二个位置参数限制为 `.climg` 输出文件。补全、帮助文本与错误提示会自动同步这一要求。
 同理，`optionPaths=--output:file:.climg|.png` 可用于限制选项值的后缀范围。
 
+仓库默认配置里还内置了一个 `md2pdf` 动态工具（`tools/md_to_pdf.py`），用于调用 `pandoc` 将 Markdown 编译为 PDF。例如：
+
+```bash
+md2pdf notes.md
+md2pdf notes.md notes.pdf --toc --engine xelatex
+```
+
+当未显式传入 `--engine` 时，脚本会自动按 `xelatex -> lualatex -> pdflatex` 顺序尝试，优先保证中文文档可用。
+对于 `xelatex/lualatex`，脚本还会自动尝试常见中文字体（如 `PingFang SC`、`Noto Serif CJK SC` 等）；如需强制指定，可设置环境变量 `MYCLI_MD2PDF_CJK_FONT`。
+
 如果需要调用系统命令或 HTTP 客户端，同样可以将 `type` 设置为 `system`，并在 `exec` 字段中填写可执行文件名称或绝对路径，CLI 会负责参数拼接与补全。例如：
 
 ```ini
@@ -306,6 +316,7 @@ positional=<url>
 - `tools/*.hpp`：每个内置命令对应一个独立头文件（例如 `tools/ls.hpp`、`tools/cat.hpp`、`tools/mv.hpp`），包含 UI 定义、执行逻辑以及 `tool::make_*_tool()` 工厂函数。
 - `tools/pytool.py`：示例 Python 工具脚本。
 - `tools/image_to_art.py`：将图片转为 `.climg` 结构化文本的脚本，可配合动态工具 `image-art` 使用。
+- `tools/md_to_pdf.py`：调用 `pandoc` 将 Markdown 编译为 PDF，可配合动态工具 `md2pdf` 使用。
 - `settings/`：默认配置目录，包含 `mycli_settings.conf`、`mycli_tools.conf`、`mycli_llm_history.json`。
 
 ## 开发提示
