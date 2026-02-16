@@ -19,6 +19,7 @@
 #include "tools/cd.hpp"
 #include "tools/ls.hpp"
 #include "tools/cat.hpp"
+#include "tools/cpf.hpp"
 #include "tools/agent/fs_read.hpp"
 #include "tools/agent/fs_write.hpp"
 #include "tools/agent/fs_create.hpp"
@@ -1152,6 +1153,7 @@ inline void register_all_tools(){
   REG.registerTool(tool::make_fs_create_tool());
   REG.registerTool(tool::make_fs_tree_tool());
   REG.registerTool(tool::make_cat_tool());
+  REG.registerTool(tool::make_cpf_tool());
   REG.registerTool(tool::make_mv_tool());
   REG.registerTool(tool::make_mkdir_tool());
   REG.registerTool(tool::make_touch_tool());
