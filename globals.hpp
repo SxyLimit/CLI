@@ -26,6 +26,7 @@ void unregister_raw_terminal(TermRaw* term);
 void suspend_raw_mode();
 void resume_raw_mode();
 int terminal_columns();
+bool read_char(char& ch);
 
 class RawModeScope {
 public:
@@ -40,7 +41,7 @@ public:
 namespace ansi {
   inline constexpr const char* CLR   = "\x1b[2K\r";
   inline constexpr const char* RESET = "\x1b[0m";
-  inline constexpr const char* WHITE = "\x1b[37m";
+  inline constexpr const char* WHITE = "\x1b[39m";
   inline constexpr const char* GRAY  = "\x1b[2m";
   inline constexpr const char* GREEN = "\x1b[32m";
   inline constexpr const char* YELLOW= "\x1b[33m";

@@ -50,6 +50,7 @@ HOME_PATH=settings
 | `message` | `message list`<br>`message last`<br>`message detail <文件>` | 监听 Markdown 通知目录，列出未读文件、查看最近修改的文件，或按文件名读取具体内容。 |
 | `memory` | `memory import/list/show/search/stats/note/query/monitor …` | 导入个人/知识文档，浏览摘要、监控异步导入，或基于记忆回答问题。 |
 | `backup` | `backup save [<path>] [-m <mark>]`<br>`backup recall [label]`<br>`backup delete <label> [-f]`<br>`backup clear [-f]` | 快速将文件/目录备份到配置目录的 `.backup/` 目录，标签由原始名称、可选标记和时间戳组成，可在 `recall`/`delete` 中按标签补全；删除和清空需二次确认或显式 `-f`。 |
+| `todo` | `todo create <name> [--start <time>] [--deadline <time>] [--repeat <expr>] [--no-edit] [-c]`<br>`todo update <name> <add|start|deadline|edit> ... [-c]`<br>`todo query [<+time>]` | 任务管理工具。支持任务名/时间表达式自动补全；`-c` 会使用 `code --wait -g <file:line:col>` 打开对应 JSON 并把光标定位到 `todo` 新建空项；数据写入 `${home.path}/todo` 下的 `name.tdle`、`operation.tdle` 与 `Details/*.json`。 |
 | `cd` | `cd <路径>`<br>`cd -o [-a\|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 仅显示目录名，`-c` 恢复完整路径）。 |
 | `ls` | `ls [-a] [-l] [-t|-S|-X|-v] [-r] [目录]` | 按当前视窗宽度自动对齐的目录列表，支持隐藏文件、包含类型/大小/修改时间的长列表模式，以及按时间（`-t`）、大小（`-S`）、扩展名（`-X`）或自然序（`-v`）排序，`-r` 可反转顺序，选项可叠加使用（如 `-lt`）。 |
 | `cat` | `cat <path> [选项]` | 便于人工快速查看文件内容；行为与 Agent 使用的 `fs.read` 保持一致。 |
@@ -74,6 +75,22 @@ HOME_PATH=settings
 - `backup recall [label]`：返回对应备份实体的绝对路径；不带参数时会列出已有备份（展示标签与路径），`label` 支持直接按前述标签补全。
 - `backup delete <label> [-f]`：删除某条备份记录及其文件。交互模式下会进行二次确认；非交互或需要静默删除时请附加 `-f`。
 - `backup clear [-f]`：清空所有备份与索引，默认要求确认，或使用 `-f` 跳过确认。
+
+## Todo 命令
+
+- `todo create`：直接回车进入交互式创建流程，会按顺序询问 `name`、`start time`、`deadline`、`repeat`、是否打开编辑器。所有字段统一复用命令行输入组件：支持左右移动光标、Home/End/Delete、行长限制、输入过长时省略号视窗、以及最多三行候选（上下键选择，Tab 选中补全）。`start/deadline/repeat` 会做前缀合法性校验，当前输入已不可能补全为合法格式时会在光标后实时显示“格式错误”。
+- `todo create <name> [--start <time>] [--deadline <time>] [--repeat <expr>] [--no-edit] [-c]`：保留原命令行参数模式。`name` 仅允许字母、数字、下划线。默认会调用 `code --wait -g` 打开 `Details/<name>.json`，JSON 会把可编辑字段放在前面（`name/start_time/deadline/repeat/todo`），其中 `todo` 是字符串数组；`--no-edit` 可跳过。
+- `todo update <name> add <text...>` / `todo update <name> start <time>` / `todo update <name> deadline <time>` / `todo update <name> edit`：追加文本、重置时间，或打开同一 JSON 编辑。附加 `-c` 时会在执行命令后继续打开对应文件（也可直接 `todo update <name> -c` 只打开编辑）。
+- `todo edit <name> [-c]`：`todo update <name> edit` 的快捷命令（支持 `-c` 保持统一参数形式）。
+- `todo delete <name> [per] [-f]`：删除任务；循环任务默认只删除当前周期，追加 `per` 可彻底删除循环任务；删除会二次确认，`-f` 跳过确认。
+- `todo query [<+time>]` / `todo today [deadline]`：按截止时间排序查询任务；`query` 可带时间窗口（如 `+3d`）。
+- `todo detail <name> [-c]` / `todo last <name> [-c]` / `todo finished [--purge] [-f]`：查看详情、最近一次更新，或查看/清理已结束任务；`detail/last -c` 会先打开对应 JSON 并在保存后立即应用。
+- 提示符提醒：仅当任务截止时间进入 5 分钟内时显示 `[T]`。其中 5 分钟内为黄色常亮，1 分钟内为红/灰闪烁；任务结束或不在提醒窗口内时不显示 `T`。与 `message` 等提示会合并显示为同一组（例如 `[MT]`）。
+- 时间表达式支持：
+  - 绝对时间：`yyyy.mm.dd`、`yyyy.mm.dd_HH:MM:SS`（也兼容 `-` 与 `T`）
+  - 相对时间：`+30m`、`+15min`、`+4h`、`+3d`
+  - 循环周期：`d|w|m|y` 或 `2d|2w|2m|2y`（兼容 `per d` 写法）
+- 数据目录：`${home.path}/todo`，其中 `name.tdle` 记录任务名，`operation.tdle` 记录操作历史，`Details/<name>.json` 保存每个任务的完整结构化内容（包含 `todo` 字符串数组与时间字段）。
 
 ## 设置命令
 
@@ -268,6 +285,7 @@ positional=<text>
 ```
 
 上述示例会在 CLI 中注册 `ai translate` 子命令，并通过 `python3 tools/ai_translate.py` 执行。脚本内部可以使用任意外部 SDK（例如请求自己的推理服务）。
+对于 `type=python` 的动态工具，`script` 相对路径会按 CLI 根目录解析（而非当前工作目录），因此可在任意目录下调用。
 
 `optionPaths` 和 `positionalPaths` 支持声明路径类型与后缀过滤：
 
@@ -294,6 +312,15 @@ md2pdf notes.md notes.pdf --toc --engine xelatex
 当未显式传入 `--engine` 时，脚本会自动按 `xelatex -> lualatex -> pdflatex` 顺序尝试，优先保证中文文档可用。
 对于 `xelatex/lualatex`，脚本还会自动尝试常见中文字体（如 `PingFang SC`、`Noto Serif CJK SC` 等）；如需强制指定，可设置环境变量 `MYCLI_MD2PDF_CJK_FONT`。
 
+另外还内置了 `tex2pdf` 动态工具（`tools/tex_to_pdf.py`），用于将 `.tex` 编译为 PDF，同样支持省略输出路径（默认同名 `.pdf`）：
+
+```bash
+tex2pdf report.tex
+tex2pdf report.tex report.pdf --engine xelatex
+```
+
+`tex2pdf` 会自动清理编译产生的 `.aux/.log/.toc/.out` 等中间文件；对缺少 CJK 包配置的文档，会在 `xelatex/lualatex` 下自动注入中文支持并尝试常见中文字体。若需强制指定字体，可设置环境变量 `MYCLI_TEX2PDF_CJK_FONT`。
+
 如果需要调用系统命令或 HTTP 客户端，同样可以将 `type` 设置为 `system`，并在 `exec` 字段中填写可执行文件名称或绝对路径，CLI 会负责参数拼接与补全。例如：
 
 ```ini
@@ -317,6 +344,7 @@ positional=<url>
 - `tools/pytool.py`：示例 Python 工具脚本。
 - `tools/image_to_art.py`：将图片转为 `.climg` 结构化文本的脚本，可配合动态工具 `image-art` 使用。
 - `tools/md_to_pdf.py`：调用 `pandoc` 将 Markdown 编译为 PDF，可配合动态工具 `md2pdf` 使用。
+- `tools/tex_to_pdf.py`：调用 TeX 引擎将 `.tex` 编译为 PDF，可配合动态工具 `tex2pdf` 使用。
 - `settings/`：默认配置目录，包含 `mycli_settings.conf`、`mycli_tools.conf`、`mycli_llm_history.json`。
 
 ## 开发提示

@@ -38,6 +38,7 @@
 #include "tools/agent/fs_admin.hpp"
 #include "tools/memory.hpp"
 #include "tools/backup.hpp"
+#include "tools/todo.hpp"
 
 inline std::vector<std::string> render_mycli_ascii_art() {
   return {
@@ -974,6 +975,19 @@ inline void register_tools_from_config(const std::string& path){
     return hints;
   };
 
+  auto resolvePythonScriptPath = [](const std::string& scriptValue){
+    if(scriptValue.empty()) return scriptValue;
+    std::filesystem::path scriptPath(scriptValue);
+    if(scriptPath.is_absolute()){
+      return scriptPath.lexically_normal().string();
+    }
+    std::filesystem::path base = cli_root_directory();
+    if(base.empty()){
+      return scriptPath.lexically_normal().string();
+    }
+    return (base / scriptPath).lexically_normal().string();
+  };
+
   for(auto& kv : all){
     const std::string& name = kv.first;
     TmpTool& T = kv.second;
@@ -1039,6 +1053,9 @@ inline void register_tools_from_config(const std::string& path){
       std::string type = T.type;
       std::string exec = T.exec;
       std::string script = T.script;
+      if(type == "python"){
+        script = resolvePythonScriptPath(script);
+      }
       def.executor = [name, type, exec, script, subs](const ToolExecutionRequest& req){
         ToolExecutionResult res;
         if(req.tokens.size() < 2){
@@ -1066,7 +1083,7 @@ inline void register_tools_from_config(const std::string& path){
             g_parse_error_cmd = name;
             return res;
           }
-          cmd = exec + " " + script + " " + subName;
+          cmd = exec + " " + shellEscape(script) + " " + shellEscape(subName);
         }else{
           cmd = exec.empty()? name : exec;
           if(!subName.empty()) cmd += " " + subName;
@@ -1085,6 +1102,9 @@ inline void register_tools_from_config(const std::string& path){
       std::string type = T.type;
       std::string exec = T.exec;
       std::string script = T.script;
+      if(type == "python"){
+        script = resolvePythonScriptPath(script);
+      }
       def.executor = [name, type, exec, script](const ToolExecutionRequest& req){
         std::string cmd;
         ToolExecutionResult res;
@@ -1096,7 +1116,7 @@ inline void register_tools_from_config(const std::string& path){
             g_parse_error_cmd = name;
             return res;
           }
-          cmd = exec + " " + script;
+          cmd = exec + " " + shellEscape(script);
         }else{
           cmd = exec.empty()? name : exec;
         }
@@ -1150,6 +1170,7 @@ inline void register_all_tools(){
   REG.registerTool(tool::make_fs_report_tool());
   REG.registerTool(tool::make_memory_tool());
   REG.registerTool(tool::make_backup_tool());
+  REG.registerTool(tool::make_todo_tool());
   REG.registerTool(tool::make_exit_tool("exit"));
   REG.registerTool(tool::make_exit_tool("quit"));
 }

@@ -269,6 +269,9 @@ static std::atomic<bool> g_agent_guard_blink_phase{false};
 static std::atomic<bool> g_agent_monitor_active{false};
 static std::atomic<int> g_memory_import_running{0};
 static std::atomic<bool> g_memory_import_recent_complete{false};
+static std::atomic<bool> g_todo_has_active{false};
+static std::atomic<int> g_todo_urgency_level{0}; // 0:none, 1:<=5m, 2:<=1m
+static std::atomic<bool> g_todo_critical_blink_phase{false};
 
 static void agent_indicator_refresh_state(){
   PromptIndicatorState state = prompt_indicator_current("agent");
@@ -328,6 +331,92 @@ static bool agent_indicator_tick_blink(){
     bool next = !g_agent_guard_blink_phase.load(std::memory_order_relaxed);
     g_agent_guard_blink_phase.store(next, std::memory_order_relaxed);
     agent_indicator_refresh_state();
+    return true;
+  }
+  return false;
+}
+
+static void todo_indicator_refresh_state(){
+  PromptIndicatorState state = prompt_indicator_current("todo");
+  state.text = "T";
+  state.bracketColor = ansi::WHITE;
+  int urgencyLevel = g_todo_urgency_level.load(std::memory_order_relaxed);
+  if(urgencyLevel >= 2){
+    state.visible = true;
+    bool blinkPhase = g_todo_critical_blink_phase.load(std::memory_order_relaxed);
+    state.textColor = blinkPhase ? std::string(ansi::RED)
+                                 : std::string(ansi::GRAY);
+  }else if(urgencyLevel == 1){
+    state.visible = true;
+    state.textColor = ansi::YELLOW;
+  }else{
+    state.visible = false;
+    state.textColor = ansi::WHITE;
+  }
+  update_prompt_indicator("todo", state);
+}
+
+static bool todo_indicator_poll(bool force = false){
+  static long long lastEvalSec = -1;
+  long long nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+    std::chrono::system_clock::now().time_since_epoch()).count();
+  if(!force && nowSec == lastEvalSec){
+    return false;
+  }
+  lastEvalSec = nowSec;
+
+  tool::TodoIndicatorSnapshot snapshot = tool::Todo::indicatorSnapshot(nowSec);
+  bool previousActive = g_todo_has_active.exchange(snapshot.hasActive, std::memory_order_relaxed);
+  int previousUrgency = g_todo_urgency_level.exchange(snapshot.urgencyLevel, std::memory_order_relaxed);
+
+  bool changed = force || previousActive != snapshot.hasActive || previousUrgency != snapshot.urgencyLevel;
+  if(snapshot.urgencyLevel < 2){
+    bool previousBlink = g_todo_critical_blink_phase.exchange(false, std::memory_order_relaxed);
+    changed = changed || previousBlink;
+  }else if(previousUrgency != snapshot.urgencyLevel){
+    g_todo_critical_blink_phase.store(false, std::memory_order_relaxed);
+    changed = true;
+  }
+
+  if(changed){
+    todo_indicator_refresh_state();
+  }
+  return changed;
+}
+
+static bool todo_indicator_tick_blink(){
+  static constexpr auto interval = std::chrono::milliseconds(500);
+  static auto lastToggle = std::chrono::steady_clock::now();
+  static bool lastCritical = false;
+
+  int urgencyLevel = g_todo_urgency_level.load(std::memory_order_relaxed);
+  bool critical = (urgencyLevel >= 2);
+  if(!critical){
+    bool blinkPhase = g_todo_critical_blink_phase.load(std::memory_order_relaxed);
+    bool hadCritical = lastCritical;
+    lastCritical = false;
+    if(hadCritical || blinkPhase){
+      g_todo_critical_blink_phase.store(false, std::memory_order_relaxed);
+      todo_indicator_refresh_state();
+      return true;
+    }
+    return false;
+  }
+
+  if(!lastCritical){
+    lastCritical = true;
+    g_todo_critical_blink_phase.store(false, std::memory_order_relaxed);
+    lastToggle = std::chrono::steady_clock::now();
+    todo_indicator_refresh_state();
+    return true;
+  }
+
+  auto now = std::chrono::steady_clock::now();
+  if(now - lastToggle >= interval){
+    lastToggle = now;
+    bool next = !g_todo_critical_blink_phase.load(std::memory_order_relaxed);
+    g_todo_critical_blink_phase.store(next, std::memory_order_relaxed);
+    todo_indicator_refresh_state();
     return true;
   }
   return false;
@@ -3210,6 +3299,7 @@ int main(){
   register_prompt_indicator(PromptIndicatorDescriptor{"llm", "L"});
   register_prompt_indicator(PromptIndicatorDescriptor{"agent", "A"});
   register_prompt_indicator(PromptIndicatorDescriptor{"memoryImport", "I"});
+  register_prompt_indicator(PromptIndicatorDescriptor{"todo", "T"});
   agent_indicator_clear();
 
   // 1) 注册内置工具与状态
@@ -3251,6 +3341,7 @@ int main(){
 
   message_poll();
   llm_poll();
+  todo_indicator_poll(true);
   bool lastMessageUnread = message_has_unread();
   bool lastLlmUnread = llm_has_unread();
 
@@ -3613,7 +3704,14 @@ int main(){
       needRender = true;
     }
 
+    bool blinkChanged = false;
     if(agent_indicator_tick_blink()){
+      blinkChanged = true;
+    }
+    if(todo_indicator_tick_blink()){
+      blinkChanged = true;
+    }
+    if(blinkChanged){
       needRender = true;
     }
     if(needRender){
@@ -3626,9 +3724,10 @@ int main(){
       bool beforeLlm = lastLlmUnread;
       message_poll();
       llm_poll();
+      bool todoChanged = todo_indicator_poll();
       bool afterMsg = message_has_unread();
       bool afterLlm = llm_has_unread();
-      if(afterMsg != beforeMsg || afterLlm != beforeLlm){
+      if(afterMsg != beforeMsg || afterLlm != beforeLlm || todoChanged){
         lastMessageUnread = afterMsg;
         lastLlmUnread = afterLlm;
         needRender = true;
@@ -3664,6 +3763,7 @@ int main(){
       }
       message_poll();
       llm_poll();
+      todo_indicator_poll(true);
       lastMessageUnread = message_has_unread();
       lastLlmUnread = llm_has_unread();
       buf.clear(); cursorByte = 0; sel=0; lastShown=0;

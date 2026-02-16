@@ -289,10 +289,16 @@ private:
   static bool confirmDangerous(const std::string& prompt, bool force, bool allowPrompt){
     if(force) return true;
     if(!allowPrompt) return false;
-    std::cout << prompt << " [y/N]: ";
-    std::cout.flush();
+    static const std::vector<std::string> yesNoSuggestions = {"y", "yes", "n", "no"};
+    detail::InteractiveLineOptions options;
+    options.prompt = prompt + " [y/N]: ";
+    options.suggestions = &yesNoSuggestions;
+    options.maxLength = 8;
+    options.maxLengthSuffix = startsWith(g_settings.language, "zh") ? " 长度已达上限" : " length limit";
+    options.suggestionRows = 3;
     std::string line;
-    if(!std::getline(std::cin, line)) return false;
+    auto status = detail::read_interactive_line(options, line);
+    if(status != detail::InteractiveLineStatus::Ok) return false;
     for(auto& ch : line) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     return line == "y" || line == "yes";
   }
