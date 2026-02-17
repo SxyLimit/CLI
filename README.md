@@ -11,6 +11,39 @@ g++ -std=c++17 main.cpp -o mycli
 
 程序会以原始模式读取键盘输入，可使用 `Ctrl+C` 或输入 `exit` / `quit` 退出。
 
+## 配置到环境变量（PATH）
+
+编译后可将项目目录加入 `PATH`，这样在任意目录都能直接执行。
+
+macOS / Linux:
+
+```bash
+# 先在项目目录编译
+g++ -std=c++17 main.cpp -o mycli
+
+# 方式 1：直接使用 mycli
+echo 'export PATH="/绝对路径/Project/CLI:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+mycli
+
+# 方式 2：使用仓库提供的 cli 启动脚本
+echo 'export PATH="/绝对路径/Project/CLI/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+cli
+```
+
+Windows (PowerShell):
+
+```powershell
+# 方式 1：直接使用 mycli.exe
+setx PATH "$env:PATH;C:\绝对路径\Project\CLI"
+
+# 方式 2：使用 cli 启动脚本（若你已在 bin 下提供对应 bat/cmd 包装）
+setx PATH "$env:PATH;C:\绝对路径\Project\CLI\bin"
+```
+
+`setx` 对新终端生效，执行后请重新打开终端窗口。
+
 需要配置如下 .env 文件：
 ```
 LLM_API_KEY=your-api-key
