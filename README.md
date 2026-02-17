@@ -52,6 +52,7 @@ HOME_PATH=settings
 | `backup` | `backup save [<path>] [-m <mark>]`<br>`backup recall [label]`<br>`backup delete <label> [-f]`<br>`backup clear [-f]` | 快速将文件/目录备份到配置目录的 `.backup/` 目录，标签由原始名称、可选标记和时间戳组成，可在 `recall`/`delete` 中按标签补全；删除和清空需二次确认或显式 `-f`。 |
 | `todo` | `todo create <name> [--start <time>] [--deadline <time>] [--repeat <expr>] [--no-edit] [-c]`<br>`todo update <name> <add|start|deadline|edit> ... [-c]`<br>`todo query [<+time>]` | 任务管理工具。支持任务名/时间表达式自动补全；`-c` 会使用 `code --wait -g <file:line:col>` 打开对应 JSON 并把光标定位到 `todo` 新建空项；数据写入 `${home.path}/todo` 下的 `name.tdle`、`operation.tdle` 与 `Details/*.json`。 |
 | `cd` | `cd <路径>`<br>`cd -o [-a\|-c]` | 切换工作目录；搭配 `-o` 可修改提示符显示模式（`-a` 仅显示目录名，`-c` 恢复完整路径）。 |
+| `cds` | `cds /<name>`<br>`cds`<br>`cds add/set/rm/rename/here/list/clear ...` | 目录快捷跳转工具。将“快捷名 -> 路径”保存到 `${home.path}/cds.json`；`cds /<name>` 跳转，随后直接输入 `cds` 可返回跳转前目录。 |
 | `ls` | `ls [-a] [-l] [-t|-S|-X|-v] [-r] [目录]` | 按当前视窗宽度自动对齐的目录列表，支持隐藏文件、包含类型/大小/修改时间的长列表模式，以及按时间（`-t`）、大小（`-S`）、扩展名（`-X`）或自然序（`-v`）排序，`-r` 可反转顺序，选项可叠加使用（如 `-lt`）。 |
 | `cat` | `cat <path> [选项]` | 便于人工快速查看文件内容；行为与 Agent 使用的 `fs.read` 保持一致。 |
 | `cpf` | `cpf <file>` | 将文件内容复制到系统剪贴板。macOS 使用 `pbcopy`，Windows 使用系统剪贴板 API。 |

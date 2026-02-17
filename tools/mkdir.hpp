@@ -56,20 +56,17 @@ struct Mkdir {
     for(const auto& pathStr : paths){
       std::error_code ec;
       if(parents){
-        std::filesystem::create_directories(pathStr, ec);
+        bool created = std::filesystem::create_directories(pathStr, ec);
         if(ec){
           exitCode = 1;
           oss << "mkdir: " << pathStr << ": " << ec.message() << "\n";
           continue;
         }
-        std::error_code statusEc;
-        bool alreadyExists = std::filesystem::exists(pathStr, statusEc) &&
-                              std::filesystem::is_directory(pathStr, statusEc);
-        oss << "mkdir: " << pathStr << " created";
-        if(!statusEc && alreadyExists){
-          oss << " (ok if already existed)";
+        if(created){
+          oss << "mkdir: " << pathStr << " created\n";
+        }else{
+          oss << "mkdir: " << pathStr << " already exists\n";
         }
-        oss << "\n";
       }else{
         std::filesystem::create_directory(pathStr, ec);
         if(ec){

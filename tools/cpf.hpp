@@ -12,6 +12,91 @@
 namespace tool {
 
 struct Cpf {
+  static std::string escapeAppleScriptString(const std::string& raw){
+    std::string out;
+    out.reserve(raw.size() + 8);
+    for(char ch : raw){
+      if(ch == '\\' || ch == '"') out.push_back('\\');
+      out.push_back(ch);
+    }
+    return out;
+  }
+
+#ifdef _WIN32
+  static bool setWindowsClipboardUnicode(const std::wstring& text, std::string& error){
+    if(!OpenClipboard(nullptr)){
+      error = "failed to open clipboard";
+      return false;
+    }
+    if(!EmptyClipboard()){
+      CloseClipboard();
+      error = "failed to clear clipboard";
+      return false;
+    }
+    const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if(!handle){
+      CloseClipboard();
+      error = "failed to allocate clipboard memory";
+      return false;
+    }
+    void* mem = GlobalLock(handle);
+    if(!mem){
+      GlobalFree(handle);
+      CloseClipboard();
+      error = "failed to lock clipboard memory";
+      return false;
+    }
+    std::memcpy(mem, text.c_str(), bytes);
+    GlobalUnlock(handle);
+    if(!SetClipboardData(CF_UNICODETEXT, handle)){
+      GlobalFree(handle);
+      CloseClipboard();
+      error = "failed to set clipboard data";
+      return false;
+    }
+    CloseClipboard();
+    return true;
+  }
+
+  static bool setWindowsClipboardAnsi(const std::string& text, std::string& error){
+    if(!OpenClipboard(nullptr)){
+      error = "failed to open clipboard";
+      return false;
+    }
+    if(!EmptyClipboard()){
+      CloseClipboard();
+      error = "failed to clear clipboard";
+      return false;
+    }
+    const size_t bytes = text.size() + 1;
+    HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if(!handle){
+      CloseClipboard();
+      error = "failed to allocate clipboard memory";
+      return false;
+    }
+    void* mem = GlobalLock(handle);
+    if(!mem){
+      GlobalFree(handle);
+      CloseClipboard();
+      error = "failed to lock clipboard memory";
+      return false;
+    }
+    std::memcpy(mem, text.data(), text.size());
+    static_cast<char*>(mem)[text.size()] = '\0';
+    GlobalUnlock(handle);
+    if(!SetClipboardData(CF_TEXT, handle)){
+      GlobalFree(handle);
+      CloseClipboard();
+      error = "failed to set clipboard data";
+      return false;
+    }
+    CloseClipboard();
+    return true;
+  }
+#endif
+
   static ToolSpec ui(){
     ToolSpec spec;
     spec.name = "cpf";
@@ -54,62 +139,65 @@ struct Cpf {
       return detail::text_result("cpf: failed to read file: " + path.string() + "\n", 1);
     }
 
+    bool copied = false;
+    std::string clipboardError;
     int wideLen = MultiByteToWideChar(CP_UTF8, 0, content.data(), static_cast<int>(content.size()), nullptr, 0);
-    if(!content.empty() && wideLen <= 0){
-      g_parse_error_cmd = "cpf";
-      return detail::text_result("cpf: failed to convert utf-8 content\n", 1);
-    }
-    std::wstring wide;
-    wide.resize(static_cast<size_t>(wideLen));
-    if(wideLen > 0){
-      int converted = MultiByteToWideChar(
-        CP_UTF8, 0, content.data(), static_cast<int>(content.size()), wide.data(), wideLen
-      );
-      if(converted <= 0){
-        g_parse_error_cmd = "cpf";
-        return detail::text_result("cpf: failed to convert utf-8 content\n", 1);
+    if(content.empty() || wideLen > 0){
+      std::wstring wide;
+      if(wideLen > 0){
+        wide.resize(static_cast<size_t>(wideLen));
+        int converted = MultiByteToWideChar(
+          CP_UTF8, 0, content.data(), static_cast<int>(content.size()), wide.data(), wideLen
+        );
+        if(converted > 0){
+          copied = setWindowsClipboardUnicode(wide, clipboardError);
+        }else{
+          clipboardError = "failed to convert utf-8 content";
+        }
+      }else{
+        copied = setWindowsClipboardUnicode(std::wstring(), clipboardError);
       }
     }
-
-    if(!OpenClipboard(nullptr)){
-      g_parse_error_cmd = "cpf";
-      return detail::text_result("cpf: failed to open clipboard\n", 1);
+    if(!copied){
+      if(content.find('\0') != std::string::npos){
+        g_parse_error_cmd = "cpf";
+        return detail::text_result("cpf: binary file content is not supported for clipboard text\n", 1);
+      }
+      copied = setWindowsClipboardAnsi(content, clipboardError);
     }
-    if(!EmptyClipboard()){
-      CloseClipboard();
+    if(!copied){
       g_parse_error_cmd = "cpf";
-      return detail::text_result("cpf: failed to clear clipboard\n", 1);
+      return detail::text_result("cpf: " + clipboardError + "\n", 1);
     }
-    const size_t bytes = (wide.size() + 1) * sizeof(wchar_t);
-    HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if(!handle){
-      CloseClipboard();
-      g_parse_error_cmd = "cpf";
-      return detail::text_result("cpf: failed to allocate clipboard memory\n", 1);
-    }
-    void* mem = GlobalLock(handle);
-    if(!mem){
-      GlobalFree(handle);
-      CloseClipboard();
-      g_parse_error_cmd = "cpf";
-      return detail::text_result("cpf: failed to lock clipboard memory\n", 1);
-    }
-    std::memcpy(mem, wide.c_str(), bytes);
-    GlobalUnlock(handle);
-    if(!SetClipboardData(CF_UNICODETEXT, handle)){
-      GlobalFree(handle);
-      CloseClipboard();
-      g_parse_error_cmd = "cpf";
-      return detail::text_result("cpf: failed to set clipboard data\n", 1);
-    }
-    CloseClipboard();
     return detail::text_result("cpf: copied to clipboard\n");
 #elif defined(__APPLE__)
-    std::string command = "pbcopy < " + shellEscape(path.string());
-    auto result = detail::execute_shell(request, command);
-    if(result.exitCode != 0){
-      g_parse_error_cmd = "cpf";
-      return detail::text_result("cpf: failed to copy file content to clipboard\n", 1);
+    std::string command = "pbcopy < " + shellEscape(path.string()) + " 2>/dev/null";
+    auto [pbcopyCode, pbcopyOutput] = detail::run_command_capture(command);
+    (void)pbcopyOutput;
+    if(pbcopyCode != 0){
+      std::error_code absEc;
+      std::filesystem::path absolutePath = std::filesystem::absolute(path, absEc);
+      const std::string pathForScript = absEc ? path.string() : absolutePath.string();
+      const std::string escapedPath = escapeAppleScriptString(pathForScript);
+      std::vector<std::string> lines = {
+        "set f to POSIX file \"" + escapedPath + "\"",
+        "set fh to open for access f",
+        "set txt to (read fh)",
+        "close access fh",
+        "set the clipboard to txt"
+      };
+      std::string osa = "osascript";
+      for(const auto& line : lines){
+        osa += " -e " + shellEscape(line);
+      }
+      auto [osaCode, osaOutput] = detail::run_command_capture(osa + " 2>/dev/null");
+      (void)osaOutput;
+      if(osaCode != 0){
+        g_parse_error_cmd = "cpf";
+        return detail::text_result(
+          "cpf: failed to copy file content to clipboard (pbcopy/osascript unavailable)\n", 1
+        );
+      }
     }
     return detail::text_result("cpf: copied to clipboard\n");
 #else

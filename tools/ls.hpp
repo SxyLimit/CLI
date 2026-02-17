@@ -48,6 +48,12 @@ struct Ls {
     spec.summary = "List directory (simple)";
     set_tool_summary_locale(spec, "en", "List directory (simple)");
     set_tool_summary_locale(spec, "zh", "列出目录（简化版）");
+    set_tool_help_locale(spec, "en",
+                         "ls [-a] [-l] [-t|-S|-X|-v] [-r] [dir]\n"
+                         "List directory entries; supports hidden files, long format, and multiple sort modes.");
+    set_tool_help_locale(spec, "zh",
+                         "ls [-a] [-l] [-t|-S|-X|-v] [-r] [目录]\n"
+                         "列出目录内容；支持隐藏文件、长格式和多种排序方式。");
     spec.options = {
       {"-a", false, {}, nullptr, false, "", false},
       {"-l", false, {}, nullptr, false, "", false},
@@ -57,7 +63,7 @@ struct Ls {
       {"-v", false, {}, nullptr, false, "", false},
       {"-r", false, {}, nullptr, false, "", false}
     };
-    spec.positional = {positional("[<dir>]")};
+    spec.positional = {positional("[<dir>]", true, PathKind::Dir, {}, true, false)};
     return spec;
   }
 
@@ -247,4 +253,3 @@ inline ToolDefinition make_ls_tool(){
 }
 
 } // namespace tool
-

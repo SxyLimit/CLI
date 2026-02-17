@@ -11,8 +11,13 @@ struct Rm {
     spec.summary = "Remove files";
     set_tool_summary_locale(spec, "en", "Remove files");
     set_tool_summary_locale(spec, "zh", "删除文件");
+    set_tool_help_locale(spec, "en", "rm [-r] <path> [more paths...]");
+    set_tool_help_locale(spec, "zh", "rm [-r] <路径> [更多路径...]");
     spec.options = {{"-r", false, {}, nullptr, false, "", false}};
-    spec.positional = {positional("<path>")};
+    spec.positional = {
+      positional("<path>", true, PathKind::Any, {}, true, false),
+      positional("[more paths...]", true, PathKind::Any, {}, true, false)
+    };
     return spec;
   }
 
@@ -26,7 +31,7 @@ struct Rm {
     }
     if(targets.empty()){
       g_parse_error_cmd = "rm";
-      return detail::text_result("usage: rm [-r] <path> [more paths]\n", 1);
+      return detail::text_result("usage: rm [-r] <path> [more paths...]\n", 1);
     }
     std::ostringstream oss;
     int exitCode = 0;
@@ -58,4 +63,3 @@ inline ToolDefinition make_rm_tool(){
 }
 
 } // namespace tool
-

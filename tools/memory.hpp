@@ -659,6 +659,12 @@ struct Memory {
     spec.summary = "Manage the MyCLI memory system";
     set_tool_summary_locale(spec, "en", "Manage the MyCLI memory system");
     set_tool_summary_locale(spec, "zh", "管理 MyCLI 记忆系统");
+    set_tool_help_locale(spec, "en",
+                         "memory import|list|show|search|stats|note|query|monitor\n"
+                         "Manage memory data import, retrieval, querying, and monitor streaming events.");
+    set_tool_help_locale(spec, "zh",
+                         "memory import|list|show|search|stats|note|query|monitor\n"
+                         "管理记忆数据的导入、检索、问答以及监控事件流。");
     spec.subs = {
       SubcommandSpec{"import", {}, {positional("<src>", true, PathKind::Any, {".md", ".txt"})}, {}, nullptr},
       SubcommandSpec{"list", {}, {positional("[<path>]")}, {}, nullptr},
@@ -692,7 +698,10 @@ struct Memory {
     if(sub == "query") return handle_memory_query(args, cfg);
     if(sub == "monitor") return handle_memory_monitor(cfg);
     g_parse_error_cmd = "memory";
-    return detail::text_result("unknown memory subcommand\n", 1);
+    std::ostringstream oss;
+    oss << "memory: unknown subcommand: " << sub << "\n";
+    oss << "usage: memory <import|list|show|search|stats|note|query|monitor>\n";
+    return detail::text_result(oss.str(), 1);
   }
 };
 
@@ -704,4 +713,3 @@ inline ToolDefinition make_memory_tool(){
 }
 
 } // namespace tool
-

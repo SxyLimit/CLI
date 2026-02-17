@@ -11,6 +11,12 @@ struct Message {
     spec.summary = "Show unread markdown notifications";
     set_tool_summary_locale(spec, "en", "Show unread markdown notifications");
     set_tool_summary_locale(spec, "zh", "查看未读的 Markdown 通知");
+    set_tool_help_locale(spec, "en",
+                         "message list | message last | message detail <file>\n"
+                         "List unread markdown files, show the latest one, or show a specific file.");
+    set_tool_help_locale(spec, "zh",
+                         "message list | message last | message detail <文件>\n"
+                         "列出未读 Markdown 文件、查看最近一条，或查看指定文件内容。");
     spec.subs = {
       SubcommandSpec{"list", {}, {}, {}, nullptr},
       SubcommandSpec{"last", {}, {}, {}, nullptr},
@@ -35,7 +41,7 @@ struct Message {
     };
     auto folderOpt = ensureFolderConfigured();
     if(!folderOpt){
-      return detail::text_result("message folder not configured. Use `setting message folder set <path>` first.\n", 1);
+      return detail::text_result("message folder not configured. Use `setting set message.folder <path>` first.\n", 1);
     }
     message_poll();
     if(sub == "list"){
@@ -124,4 +130,3 @@ inline ToolDefinition make_message_tool(){
 }
 
 } // namespace tool
-

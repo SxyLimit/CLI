@@ -17,6 +17,7 @@
 #include "tools/llm.hpp"
 #include "tools/message.hpp"
 #include "tools/cd.hpp"
+#include "tools/cds.hpp"
 #include "tools/ls.hpp"
 #include "tools/cat.hpp"
 #include "tools/cpf.hpp"
@@ -769,6 +770,10 @@ struct Exit {
     ToolSpec spec;
     spec.name = name;
     spec.summary = "Exit the shell";
+    set_tool_summary_locale(spec, "en", "Exit the shell");
+    set_tool_summary_locale(spec, "zh", "退出命令行");
+    set_tool_help_locale(spec, "en", name + "  # exit the shell");
+    set_tool_help_locale(spec, "zh", name + "  # 退出命令行");
     return spec;
   }
 
@@ -1061,7 +1066,7 @@ inline void register_tools_from_config(const std::string& path){
         ToolExecutionResult res;
         if(req.tokens.size() < 2){
           res.exitCode = 1;
-          res.output = "usage: " + name + " <subcommand> [options]\n";
+          res.output = trFmt("dynamic_tool_usage", {{"name", name}}) + "\n";
           res.display = res.output;
           g_parse_error_cmd = name;
           return res;
@@ -1070,7 +1075,7 @@ inline void register_tools_from_config(const std::string& path){
         auto it = subs.find(subName);
         if(it == subs.end()){
           res.exitCode = 1;
-          res.output = "unknown subcommand: " + subName + "\n";
+          res.output = trFmt("dynamic_tool_unknown_subcommand", {{"name", subName}}) + "\n";
           res.display = res.output;
           g_parse_error_cmd = name;
           return res;
@@ -1079,7 +1084,7 @@ inline void register_tools_from_config(const std::string& path){
         if(type == "python"){
           if(exec.empty() || script.empty()){
             res.exitCode = 1;
-            res.output = "python tool not configured\n";
+            res.output = tr("dynamic_tool_python_not_configured") + "\n";
             res.display = res.output;
             g_parse_error_cmd = name;
             return res;
@@ -1147,6 +1152,7 @@ inline void register_all_tools(){
   REG.registerTool(tool::make_llm_tool());
   REG.registerTool(tool::make_message_tool());
   REG.registerTool(tool::make_cd_tool());
+  REG.registerTool(tool::make_cds_tool());
   REG.registerTool(tool::make_ls_tool());
   REG.registerTool(tool::make_fs_read_tool());
   REG.registerTool(tool::make_fs_write_tool());

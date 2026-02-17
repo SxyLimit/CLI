@@ -11,7 +11,7 @@ struct Cd {
     spec.summary = "Change directory";
     set_tool_summary_locale(spec, "en", "Change directory");
     set_tool_summary_locale(spec, "zh", "切换目录");
-    spec.positional = {positional("<dir>")};
+    spec.positional = {positional("<dir>", true, PathKind::Dir, {}, true, false)};
     set_tool_help_locale(spec, "en", "cd <path> | cd -o [-a|-c]");
     set_tool_help_locale(spec, "zh", "cd <路径> | cd -o [-a|-c]");
     return spec;
@@ -73,4 +73,3 @@ inline ToolDefinition make_cd_tool(){
 }
 
 } // namespace tool
-
